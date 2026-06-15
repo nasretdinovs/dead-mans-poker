@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700&family=Cinzel:wght@400;500;600&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  input,select,button,textarea{font-family:inherit}
+  ::selection{background:rgba(200,146,42,.4);color:#0d0906}
+  @keyframes dmp-rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes dmp-flicker{0%,100%{text-shadow:0 0 40px rgba(200,146,42,.34)}42%{text-shadow:0 0 30px rgba(200,146,42,.22)}68%{text-shadow:0 0 46px rgba(200,146,42,.4)}}
+  @keyframes dmp-glow{0%,100%{box-shadow:0 0 16px rgba(200,146,42,.25),0 8px 22px rgba(0,0,0,.55)}50%{box-shadow:0 0 32px rgba(200,146,42,.5),0 8px 22px rgba(0,0,0,.55)}}
+</style>
+</helmet>
+<div style="min-height:100vh;background-color:#0d0906;background-image:radial-gradient(ellipse at 50% -5%,rgba(200,146,42,.10),transparent 55%),radial-gradient(ellipse at 50% 125%,rgba(0,0,0,.7),transparent 60%);font-family:'Cormorant Garamond',Georgia,serif;color:#e8d5a3;overflow-x:hidden;padding:0 16px 64px;">
+
+  <!-- BRAND -->
+  <div style="text-align:center;padding:38px 8px 14px;">
+    <div style="font-family:'Cinzel Decorative',serif;font-weight:700;font-size:clamp(30px,5vw,50px);color:#c8922a;letter-spacing:.03em;line-height:1.05;animation:dmp-flicker 4.5s ease-in-out infinite;">{{ title }}</div>
+    <div style="font-family:'Cinzel',serif;font-size:13px;letter-spacing:.4em;text-transform:uppercase;color:rgba(232,213,163,.5);margin-top:12px;">{{ subtitle }}</div>
+  </div>
+
+  <!-- LOBBY -->
+  <sc-if value="{{ isLobby }}" hint-placeholder-val="{{ true }}">
+    <div style="max-width:480px;margin:14px auto 0;background:linear-gradient(160deg,#1f1508 0%,#120d05 100%);border:1px solid rgba(180,130,60,.25);border-radius:8px;box-shadow:inset 0 1px 0 rgba(200,146,42,.1),0 24px 60px rgba(0,0,0,.6);overflow:hidden;animation:dmp-rise .45s ease both;">
+      <div style="background:linear-gradient(90deg,transparent,rgba(180,130,60,.14),transparent);border-bottom:1px solid rgba(180,130,60,.15);padding:9px 0;text-align:center;font-family:'Cinzel',serif;font-size:12px;letter-spacing:.32em;text-transform:uppercase;color:rgba(232,213,163,.55);">Take Your Seat</div>
+      <div style="padding:26px 32px 30px;">
+        <div style="font-family:'Cormorant Garamond',serif;font-style:italic;font-size:18px;color:rgba(232,213,163,.6);text-align:center;">Place your bets. Settle the score.</div>
+        <div style="display:flex;align-items:center;gap:12px;margin:20px 0;"><div style="flex:1;height:1px;background:rgba(180,130,60,.2);"></div><div style="color:#c8922a;font-size:11px;">✦</div><div style="flex:1;height:1px;background:rgba(180,130,60,.2);"></div></div>
+
+        <label style="display:block;font-family:'Cinzel',serif;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:rgba(232,213,163,.55);margin-bottom:7px;">Your Name</label>
+        <input value="{{ nameInput }}" onChange="{{ onName }}" placeholder="e.g. Doc Holliday" style="background:rgba(255,255,255,.04);border:1px solid rgba(180,130,60,.3);border-radius:4px;color:#e8d5a3;padding:11px 13px;font-family:'Cormorant Garamond',serif;font-size:17px;width:100%;outline:none;transition:border-color .2s,box-shadow .2s;" style-focus="border-color:rgba(200,146,42,.7);box-shadow:0 0 0 3px rgba(200,146,42,.12);">
+
+        <label style="display:block;font-family:'Cinzel',serif;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:rgba(232,213,163,.55);margin:18px 0 7px;">Choose Deck</label>
+        <select value="{{ deckType }}" onChange="{{ onDeck }}" style="background:rgba(255,255,255,.04);border:1px solid rgba(180,130,60,.3);border-radius:4px;color:#e8d5a3;padding:11px 13px;font-family:'Cormorant Garamond',serif;font-size:16px;width:100%;outline:none;cursor:pointer;" style-focus="border-color:rgba(200,146,42,.7);box-shadow:0 0 0 3px rgba(200,146,42,.12);">
+          <sc-for list="{{ deckOptions }}" as="opt" hint-placeholder-count="5">
+            <option value="{{ opt.value }}" style="background:#1a1108;">{{ opt.label }}</option>
+          </sc-for>
+        </select>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;">
+          <sc-for list="{{ previewCards }}" as="cv" hint-placeholder-count="8">
+            <span style="font-family:'Playfair Display',serif;font-weight:700;font-size:13px;min-width:28px;text-align:center;padding:4px 11px;background:rgba(200,146,42,.1);border:1px solid rgba(200,146,42,.3);border-radius:20px;color:#e8d5a3;">{{ cv }}</span>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ error }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:16px;color:#d98a6a;font-style:italic;font-size:16px;">{{ error }}</div>
+        </sc-if>
+
+        <button onClick="{{ onCreate }}" style="margin-top:24px;width:100%;font-family:'Cinzel',serif;font-weight:600;text-transform:uppercase;letter-spacing:.15em;font-size:15px;background:linear-gradient(135deg,#c8922a,#a07020);color:#0d0906;border:none;border-radius:4px;padding:14px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.4);transition:box-shadow .2s,filter .2s;" style-hover="filter:brightness(1.08);box-shadow:0 0 22px rgba(200,146,42,.4);">Create Room</button>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- JOIN -->
+  <sc-if value="{{ isJoin }}" hint-placeholder-val="{{ false }}">
+    <div style="max-width:460px;margin:14px auto 0;background:linear-gradient(160deg,#1f1508 0%,#120d05 100%);border:1px solid rgba(180,130,60,.25);border-radius:8px;box-shadow:inset 0 1px 0 rgba(200,146,42,.1),0 24px 60px rgba(0,0,0,.6);overflow:hidden;animation:dmp-rise .45s ease both;">
+      <div style="background:linear-gradient(90deg,transparent,rgba(180,130,60,.14),transparent);border-bottom:1px solid rgba(180,130,60,.15);padding:9px 0;text-align:center;font-family:'Cinzel',serif;font-size:12px;letter-spacing:.32em;text-transform:uppercase;color:rgba(232,213,163,.55);">You're Invited</div>
+      <div style="padding:26px 32px 30px;text-align:center;">
+        <div style="font-family:'Cinzel',serif;font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:rgba(232,213,163,.5);">Table</div>
+        <div style="font-family:'Playfair Display',serif;font-weight:900;font-size:34px;letter-spacing:.12em;color:#c8922a;text-shadow:0 0 24px rgba(200,146,42,.3);margin-top:2px;">{{ roomCode }}</div>
+        <div style="display:flex;align-items:center;gap:12px;margin:20px 0;"><div style="flex:1;height:1px;background:rgba(180,130,60,.2);"></div><div style="color:#c8922a;font-size:11px;">✦</div><div style="flex:1;height:1px;background:rgba(180,130,60,.2);"></div></div>
+
+        <label style="display:block;text-align:left;font-family:'Cinzel',serif;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:rgba(232,213,163,.55);margin-bottom:7px;">Your Name</label>
+        <input value="{{ nameInput }}" onChange="{{ onName }}" placeholder="e.g. Calamity Jane" style="background:rgba(255,255,255,.04);border:1px solid rgba(180,130,60,.3);border-radius:4px;color:#e8d5a3;padding:11px 13px;font-family:'Cormorant Garamond',serif;font-size:17px;width:100%;outline:none;text-align:left;transition:border-color .2s,box-shadow .2s;" style-focus="border-color:rgba(200,146,42,.7);box-shadow:0 0 0 3px rgba(200,146,42,.12);">
+
+        <sc-if value="{{ error }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:16px;color:#d98a6a;font-style:italic;font-size:16px;">{{ error }}</div>
+        </sc-if>
+
+        <button onClick="{{ onJoin }}" style="margin-top:24px;width:100%;font-family:'Cinzel',serif;font-weight:600;text-transform:uppercase;letter-spacing:.15em;font-size:15px;background:linear-gradient(135deg,#c8922a,#a07020);color:#0d0906;border:none;border-radius:4px;padding:14px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.4);transition:box-shadow .2s,filter .2s;" style-hover="filter:brightness(1.08);box-shadow:0 0 22px rgba(200,146,42,.4);">Join the Table</button>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- WAITING -->
+  <sc-if value="{{ isWaiting }}" hint-placeholder-val="{{ false }}">
+    <div style="max-width:580px;margin:14px auto 0;background:linear-gradient(160deg,#1f1508 0%,#120d05 100%);border:1px solid rgba(180,130,60,.25);border-radius:8px;box-shadow:inset 0 1px 0 rgba(200,146,42,.1),0 24px 60px rgba(0,0,0,.6);overflow:hidden;animation:dmp-rise .45s ease both;">
+      <div style="background:linear-gradient(90deg,transparent,rgba(180,130,60,.14),transparent);border-bottom:1px solid rgba(180,130,60,.15);padding:9px 0;text-align:center;font-family:'Cinzel',serif;font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:rgba(232,213,163,.55);">The Table Is Set</div>
+      <div style="padding:24px 28px 28px;">
+        <div style="text-align:center;font-family:'Cormorant Garamond',serif;font-style:italic;font-size:17px;color:rgba(232,213,163,.6);">Waiting for the players to gather…</div>
+        <div style="text-align:center;font-family:'Playfair Display',serif;font-weight:700;letter-spacing:.16em;font-size:18px;color:#c8922a;margin-top:6px;">TABLE {{ roomId }}</div>
+        <div style="display:flex;align-items:center;gap:12px;margin:18px 0;"><div style="flex:1;height:1px;background:rgba(180,130,60,.2);"></div><div style="color:#c8922a;font-size:11px;">✦</div><div style="flex:1;height:1px;background:rgba(180,130,60,.2);"></div></div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:center;">
+          <sc-for list="{{ playerList }}" as="p" hint-placeholder-count="3">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:8px;width:90px;">
+              <div style="width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:18px;color:#c8922a;background:linear-gradient(135deg,#2a1e0a,#1a1208);border:{{ p.avatarBorder }};box-shadow:{{ p.avatarGlow }};">{{ p.initials }}</div>
+              <div style="font-family:'Cormorant Garamond',serif;font-size:14px;color:{{ p.nameColor }};background:rgba(0,0,0,.4);border:1px solid rgba(180,130,60,.2);border-radius:12px;padding:2px 11px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ p.label }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="margin-top:22px;background:rgba(0,0,0,.25);border:1px solid rgba(180,130,60,.2);border-radius:6px;padding:12px 14px;">
+          <div style="font-family:'Cinzel',serif;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:rgba(232,213,163,.5);margin-bottom:8px;">Invite a Gunslinger</div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input value="{{ inviteLink }}" readonly="readonly" style="flex:1;min-width:0;background:rgba(255,255,255,.03);border:1px solid rgba(180,130,60,.25);border-radius:4px;color:rgba(232,213,163,.65);padding:9px 11px;font-family:'Cormorant Garamond',serif;font-size:14px;outline:none;">
+            <button onClick="{{ onCopy }}" style="white-space:nowrap;font-family:'Cinzel',serif;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.1em;background:linear-gradient(135deg,#c8922a,#a07020);color:#0d0906;border:none;border-radius:4px;padding:9px 15px;cursor:pointer;transition:filter .2s,box-shadow .2s;" style-hover="filter:brightness(1.08);box-shadow:0 0 16px rgba(200,146,42,.35);">{{ copyLabel }}</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;margin-top:24px;">
+          <button onClick="{{ onStart }}" style="flex:2;font-family:'Cinzel',serif;font-weight:600;text-transform:uppercase;letter-spacing:.15em;font-size:15px;background:linear-gradient(135deg,#c8922a,#a07020);color:#0d0906;border:none;border-radius:4px;padding:14px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.4);transition:filter .2s,box-shadow .2s;" style-hover="filter:brightness(1.08);box-shadow:0 0 22px rgba(200,146,42,.4);">Start the Game</button>
+          <button onClick="{{ onLeave }}" style="flex:1;font-family:'Cinzel',serif;font-weight:600;text-transform:uppercase;letter-spacing:.12em;font-size:14px;background:linear-gradient(135deg,#6b1515,#4a0e0e);color:#e8d5a3;border:none;border-radius:4px;padding:14px;cursor:pointer;transition:filter .2s,box-shadow .2s;" style-hover="filter:brightness(1.15);box-shadow:0 0 18px rgba(107,21,21,.5);">Leave</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- GAME -->
+  <sc-if value="{{ isGame }}" hint-placeholder-val="{{ false }}">
+    <div style="max-width:920px;margin:6px auto 0;animation:dmp-rise .45s ease both;">
+
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;background:linear-gradient(160deg,#1f1508,#120d05);border:1px solid rgba(180,130,60,.25);border-radius:8px;box-shadow:inset 0 1px 0 rgba(200,146,42,.08),0 12px 30px rgba(0,0,0,.5);padding:11px 16px;font-family:'Cinzel',serif;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#e8d5a3;">
+        <span style="color:#c8922a;">Round {{ round }}</span>
+        <span style="color:rgba(180,130,60,.4);">✦</span>
+        <span>Table {{ roomId }}</span>
+        <span style="color:rgba(180,130,60,.4);">✦</span>
+        <span style="color:rgba(232,213,163,.5);">{{ votedCount }}/{{ total }} Bets</span>
+        <span style="flex:1;"></span>
+        <button onClick="{{ onCopy }}" style="font-family:'Cinzel',serif;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.1em;background:linear-gradient(135deg,#c8922a,#a07020);color:#0d0906;border:none;border-radius:4px;padding:7px 13px;cursor:pointer;transition:filter .2s;" style-hover="filter:brightness(1.1);">{{ copyShort }}</button>
+        <button onClick="{{ onLeave }}" style="font-family:'Cinzel',serif;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.1em;background:linear-gradient(135deg,#6b1515,#4a0e0e);color:#e8d5a3;border:none;border-radius:4px;padding:7px 13px;cursor:pointer;transition:filter .2s;" style-hover="filter:brightness(1.15);">Leave</button>
+      </div>
+
+      <div style="position:relative;width:900px;max-width:100%;height:540px;margin:14px auto 0;">
+        <div style="position:absolute;left:50%;top:238px;transform:translate(-50%,-50%);width:600px;max-width:90%;height:300px;border-radius:50%;background:radial-gradient(ellipse at 50% 36%,#5c3010,#2a1508 72%,#1a0e04);padding:13px;box-shadow:0 0 0 8px rgba(30,15,5,.8),0 0 60px rgba(0,0,0,.8);">
+          <div style="width:100%;height:100%;border-radius:50%;background:radial-gradient(ellipse at center,#2a5238 0%,#1e3d2a 60%,#152b1e 100%);box-shadow:inset 0 0 60px rgba(0,0,0,.55);"></div>
+        </div>
+        <div style="position:absolute;left:50%;top:238px;transform:translate(-50%,-50%);z-index:1;color:rgba(200,146,42,.16);font-size:38px;">✦</div>
+
+        <div style="position:absolute;left:50%;top:238px;transform:translate(-50%,-50%);z-index:6;text-align:center;width:344px;max-width:82%;">
+          <sc-if value="{{ revealed }}" hint-placeholder-val="{{ false }}">
+            <div style="background:linear-gradient(160deg,#1f1508,#120d05);border:1px solid rgba(180,130,60,.3);border-radius:8px;box-shadow:inset 0 0 40px rgba(200,146,42,.12),0 20px 50px rgba(0,0,0,.7);padding:18px 26px 20px;animation:dmp-rise .4s ease both;">
+              <div style="font-family:'Cinzel',serif;font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:rgba(232,213,163,.5);">The Verdict</div>
+              <div style="font-family:'Playfair Display',serif;font-weight:900;font-size:4rem;line-height:1;color:#c8922a;text-shadow:0 0 30px rgba(200,146,42,.4);margin-top:2px;">{{ resultValue }}</div>
+              <sc-if value="{{ allSame }}" hint-placeholder-val="{{ false }}">
+                <div style="font-family:'Cinzel',serif;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#7fbf93;margin-top:2px;">✦ Unanimous ✦</div>
+              </sc-if>
+              <div style="font-family:'Cormorant Garamond',serif;font-size:15px;color:rgba(232,213,163,.55);margin-top:3px;">{{ resultSub }}</div>
+              <sc-if value="{{ showBar }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-top:14px;">
+                  <div style="position:relative;height:3px;background:rgba(180,130,60,.2);border-radius:2px;">
+                    <div style="position:absolute;top:50%;left:{{ resultPct }};transform:translate(-50%,-50%);width:13px;height:13px;border-radius:50%;background:#c8922a;box-shadow:0 0 14px rgba(200,146,42,.6);"></div>
+                  </div>
+                  <div style="display:flex;justify-content:space-between;margin-top:7px;font-family:'Cinzel',serif;font-size:11px;color:rgba(232,213,163,.4);"><span>{{ minLabel }}</span><span>{{ maxLabel }}</span></div>
+                </div>
+              </sc-if>
+              <button onClick="{{ onNewRound }}" style="margin-top:16px;font-family:'Cinzel',serif;font-weight:600;text-transform:uppercase;letter-spacing:.14em;font-size:13px;background:linear-gradient(135deg,#c8922a,#a07020);color:#0d0906;border:none;border-radius:4px;padding:11px 20px;cursor:pointer;transition:filter .2s,box-shadow .2s;" style-hover="filter:brightness(1.08);box-shadow:0 0 18px rgba(200,146,42,.4);">New Round</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{ showReveal }}" hint-placeholder-val="{{ false }}">
+            <button onClick="{{ onReveal }}" style="font-family:'Cinzel',serif;font-weight:600;text-transform:uppercase;letter-spacing:.18em;font-size:18px;background:linear-gradient(135deg,#c8922a,#a07020);color:#0d0906;border:none;border-radius:6px;padding:17px 32px;cursor:pointer;animation:dmp-glow 2.6s ease-in-out infinite;">Reveal</button>
+          </sc-if>
+          <sc-if value="{{ showWaiting }}" hint-placeholder-val="{{ true }}">
+            <div style="display:inline-block;background:linear-gradient(160deg,#1f1508,#120d05);border:1px solid rgba(180,130,60,.25);border-radius:8px;box-shadow:0 12px 30px rgba(0,0,0,.6);padding:13px 22px;">
+              <div style="font-family:'Cinzel',serif;font-size:14px;letter-spacing:.18em;text-transform:uppercase;color:#c8922a;">Awaiting Bets</div>
+              <div style="font-family:'Cormorant Garamond',serif;font-style:italic;font-size:15px;color:rgba(232,213,163,.55);margin-top:3px;">{{ votedCount }} of {{ total }} have placed</div>
+            </div>
+          </sc-if>
+        </div>
+
+        {{ seatsEl }}
+      </div>
+
+      <div style="text-align:center;margin-top:8px;">
+        <div style="font-family:'Cinzel',serif;font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:rgba(200,146,42,.8);">{{ handCaption }}</div>
+      </div>
+      <div style="position:relative;height:164px;max-width:760px;margin:8px auto 0;">
+        {{ fanEl }}
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1000,&quot;height&quot;:820},&quot;brand&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Dead Man's Poker&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;tagline&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Estimation Saloon&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;defaultDeck&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;fibonacci&quot;,&quot;options&quot;:[&quot;fibonacci&quot;,&quot;modified&quot;,&quot;powers2&quot;,&quot;tshirt&quot;,&quot;hours&quot;],&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  decks = {
+    fibonacci:['1','2','3','5','8','13','21','34','55','89'],
+    modified:['0','½','1','2','3','5','8','13','20','40','100','?'],
+    powers2:['1','2','4','8','16','32','64'],
+    tshirt:['XS','S','M','L','XL','XXL'],
+    hours:['1','2','4','8','16','24','32','40'],
+  };
+  deckOptions = [
+    {value:'fibonacci',label:'Fibonacci'},
+    {value:'modified',label:'Modified Fibonacci'},
+    {value:'powers2',label:'Powers of 2'},
+    {value:'tshirt',label:'T-Shirt Sizes'},
+    {value:'hours',label:'Hours'},
+  ];
+  state = { nameInput:'', deckType:undefined, error:'', copied:false, hoverCard:-1, joined:false, roomId:null, urlRoom:null, room:null };
+
+  key(id){ return 'dmp_room_'+id; }
+  loadRoom(id){ try{ const s=localStorage.getItem(this.key(id)); return s?JSON.parse(s):null; }catch(e){ return null; } }
+  saveRoom(id,room){ try{ localStorage.setItem(this.key(id),JSON.stringify(room)); }catch(e){} }
+  genId(){ const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let r=''; for(let i=0;i<6;i++) r+=c[Math.floor(Math.random()*c.length)]; return this.loadRoom(r)?this.genId():r; }
+
+  componentDidMount(){
+    let pid = sessionStorage.getItem('dmp_pid');
+    if(!pid){ pid='p-'+Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4); sessionStorage.setItem('dmp_pid',pid); }
+    this.pid = pid;
+    let r=null;
+    try{ r = new URLSearchParams(location.search).get('room'); }catch(e){}
+    const next = { urlRoom:r };
+    if(r){ const room=this.loadRoom(r); if(room){ next.room=room; if(room.players[pid]){ next.joined=true; next.roomId=r; } } }
+    this.setState(next);
+    this._onStorage = (e)=>{ const id=this.state.roomId||this.state.urlRoom; if(id && e.key===this.key(id)) this.refresh(); };
+    window.addEventListener('storage', this._onStorage);
+    this._poll = setInterval(()=>this.refresh(), 2000);
+  }
+  componentWillUnmount(){ window.removeEventListener('storage', this._onStorage); clearInterval(this._poll); }
+
+  refresh(){
+    const id = this.state.roomId || this.state.urlRoom;
+    if(!id) return;
+    const room = this.loadRoom(id);
+    if(!room){ if(this.state.joined||this.state.room) this.setState({joined:false, room:null}); return; }
+    if(this.state.joined && !room.players[this.pid]){ this.setState({joined:false, room}); return; }
+    if(JSON.stringify(room)!==JSON.stringify(this.state.room)) this.setState({room});
+  }
+  update(fn){
+    const id=this.state.roomId; if(!id) return;
+    const room=this.loadRoom(id); if(!room) return;
+    fn(room); this.saveRoom(id,room); this.setState({room});
+  }
+
+  resolvedDeck(){ return this.state.deckType ?? this.props.defaultDeck ?? 'fibonacci'; }
+
+  createRoom(){
+    const name=(this.state.nameInput||'').trim();
+    if(!name){ this.setState({error:'Enter your name, stranger.'}); return; }
+    const deck=this.resolvedDeck();
+    const id=this.genId();
+    const room={ deckType:deck, cards:this.decks[deck], players:{}, revealed:false, round:1, started:false };
+    room.players[this.pid]={ name, vote:null, joinedAt:Date.now() };
+    this.saveRoom(id,room);
+    try{ history.replaceState({},'','?room='+id); }catch(e){}
+    this.setState({ joined:true, roomId:id, urlRoom:id, room, error:'' });
+  }
+  joinRoom(){
+    const name=(this.state.nameInput||'').trim();
+    if(!name){ this.setState({error:'Enter your name, stranger.'}); return; }
+    const id=this.state.urlRoom;
+    const room=this.loadRoom(id);
+    if(!room){ this.setState({error:'No such table in this town, partner.'}); return; }
+    const taken=Object.values(room.players).some(p=>p.name.toLowerCase()===name.toLowerCase());
+    if(taken){ this.setState({error:'That name is already at the table.'}); return; }
+    room.players[this.pid]={ name, vote:null, joinedAt:Date.now() };
+    this.saveRoom(id,room);
+    this.setState({ joined:true, roomId:id, room, error:'' });
+  }
+  vote(card){ this.update(r=>{ if(r.revealed) return; if(r.players[this.pid]) r.players[this.pid].vote=card; }); }
+  reveal(){ this.update(r=>{ r.revealed=true; }); }
+  newRound(){ this.update(r=>{ r.revealed=false; r.round=(r.round||1)+1; Object.values(r.players).forEach(p=>p.vote=null); }); }
+  startGame(){ this.update(r=>{ r.started=true; }); }
+  leave(){
+    const id=this.state.roomId;
+    if(id){ const room=this.loadRoom(id); if(room){ delete room.players[this.pid]; if(Object.keys(room.players).length===0) localStorage.removeItem(this.key(id)); else this.saveRoom(id,room); } }
+    try{ history.replaceState({},'',location.pathname); }catch(e){}
+    this.setState({ joined:false, roomId:null, room:null, urlRoom:null, error:'' });
+  }
+  copyInvite(){
+    const link=this.inviteLink();
+    try{ navigator.clipboard.writeText(link); }catch(e){}
+    this.setState({copied:true});
+    clearTimeout(this._ct); this._ct=setTimeout(()=>this.setState({copied:false}),1600);
+  }
+  inviteLink(){ const id=this.state.roomId||this.state.urlRoom||''; try{ return location.origin+location.pathname+'?room='+id; }catch(e){ return '?room='+id; } }
+
+  computeResult(room){
+    const votes=Object.values(room.players).map(p=>p.vote).filter(v=>v!=null);
+    if(!votes.length) return {value:'—', sub:'no bets', allSame:false};
+    const allSame=votes.every(v=>v===votes[0]);
+    const toNum=v=> v==='½'?0.5 : (/^[0-9]+(\.[0-9]+)?$/.test(v)?Number(v):null);
+    const nums=votes.map(toNum).filter(n=>n!=null);
+    if(room.deckType!=='tshirt' && nums.length){
+      const avg=nums.reduce((a,b)=>a+b,0)/nums.length;
+      const rounded=Math.round(avg*10)/10;
+      return {value:String(rounded), sub:'average of '+votes.length+' bet'+(votes.length===1?'':'s'), allSame};
+    }
+    const freq={}; votes.forEach(v=>{freq[v]=(freq[v]||0)+1;});
+    let best=votes[0],bc=0; for(const k in freq){ if(freq[k]>bc){bc=freq[k];best=k;} }
+    return {value:best, sub:'most common of '+votes.length+' bet'+(votes.length===1?'':'s'), allSame};
+  }
+
+  diamondMesh(){ return 'repeating-linear-gradient(45deg,rgba(180,130,60,.15) 0 1px,transparent 1px 9px),repeating-linear-gradient(-45deg,rgba(180,130,60,.15) 0 1px,transparent 1px 9px)'; }
+
+  buildSeats(room){
+    if(!room) return null;
+    const ps=Object.entries(room.players).map(([id,p])=>({id,...p})).sort((a,b)=>a.joinedAt-b.joinedAt);
+    const n=ps.length, cx=450, cy=238, rx=394, ry=214;
+    return ps.map((p,i)=>{
+      const ang=(-Math.PI/2)+i*2*Math.PI/n;
+      const x=cx+rx*Math.cos(ang), y=cy+ry*Math.sin(ang);
+      const me=p.id===this.pid;
+      const voted=p.vote!=null;
+      const initials=(p.name||'?').trim().split(/\s+/).map(w=>w[0]||'').slice(0,2).join('').toUpperCase()||'?';
+      let slot;
+      if(!voted){
+        slot=React.createElement('div',{style:{width:'46px',height:'64px',borderRadius:'7px',border:'1px solid rgba(180,130,60,.22)',background:'rgba(255,255,255,.02)'}});
+      } else {
+        const back=React.createElement('div',{style:{position:'absolute',inset:0,backfaceVisibility:'hidden',WebkitBackfaceVisibility:'hidden',borderRadius:'7px',border:'1px solid rgba(200,146,42,.4)',backgroundColor:'#1a0a0a',backgroundImage:this.diamondMesh()}});
+        const face=React.createElement('div',{style:{position:'absolute',inset:0,backfaceVisibility:'hidden',WebkitBackfaceVisibility:'hidden',transform:'rotateY(180deg)',borderRadius:'7px',border:'1px solid rgba(180,130,60,.45)',background:'#f5ead8',color:'#1a0e04',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Playfair Display',serif",fontWeight:900,fontSize:(p.vote&&p.vote.length>2)?'15px':'24px'}},p.vote);
+        const inner=React.createElement('div',{style:{position:'relative',width:'100%',height:'100%',transition:'transform .6s cubic-bezier(.4,0,.2,1)',transformStyle:'preserve-3d',transform:room.revealed?'rotateY(180deg)':'rotateY(0deg)'}},back,face);
+        slot=React.createElement('div',{style:{width:'46px',height:'64px',perspective:'600px'}},inner);
+      }
+      const avatar=React.createElement('div',{style:{width:'56px',height:'56px',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Cinzel',serif",fontSize:'18px',color:'#c8922a',background:'linear-gradient(135deg,#2a1e0a,#1a1208)',border:me?'2px solid rgba(200,146,42,.85)':'2px solid rgba(200,146,42,.4)',boxShadow:voted?'0 0 0 3px rgba(200,146,42,.22),0 0 18px rgba(200,146,42,.3)':'0 4px 12px rgba(0,0,0,.5)'}},initials);
+      const name=React.createElement('div',{style:{fontFamily:"'Cormorant Garamond',serif",fontSize:'14px',color:me?'#c8922a':'#e8d5a3',background:'rgba(0,0,0,.45)',border:'1px solid rgba(180,130,60,.2)',borderRadius:'12px',padding:'2px 11px',maxWidth:'110px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},p.name+(me?' (you)':''));
+      return React.createElement('div',{key:p.id,style:{position:'absolute',left:x+'px',top:y+'px',transform:'translate(-50%,-50%)',display:'flex',flexDirection:'column',alignItems:'center',gap:'7px',width:'116px',zIndex:4}},slot,avatar,name);
+    });
+  }
+
+  buildFan(room){
+    if(!room) return null;
+    const cards=room.cards||[]; const m=cards.length; const c=(m-1)/2;
+    const myVote=room.players[this.pid]?room.players[this.pid].vote:null;
+    return cards.map((card,j)=>{
+      const off=j-c;
+      const selected=myVote===card;
+      const hovered=this.state.hoverCard===j && !room.revealed;
+      const lift=selected?-42:(hovered?-12:Math.abs(off)*5);
+      const rot=off*4;
+      const style={position:'absolute',left:`calc(50% + ${off*48}px)`,bottom:'0',transformOrigin:'bottom center',transform:`translateX(-50%) rotate(${rot}deg) translateY(${lift}px)`,transition:'transform .2s cubic-bezier(.4,0,.2,1),box-shadow .2s',cursor:room.revealed?'default':'pointer',zIndex:(hovered||selected)?60:10+j};
+      const face={position:'relative',width:'66px',height:'94px',borderRadius:'8px',background:'#f5ead8',border:selected?'2px solid #c8922a':'1px solid rgba(180,130,60,.4)',boxShadow:selected?'0 12px 30px rgba(200,146,42,.28)':(hovered?'0 12px 30px rgba(200,146,42,.2)':'0 8px 20px rgba(0,0,0,.5)'),display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'space-between',padding:'8px 0',color:'#1a0e04'};
+      const orn={fontSize:'11px',color:'rgba(200,146,42,.75)'};
+      return React.createElement('div',{key:card,style,onMouseEnter:()=>this.setState({hoverCard:j}),onMouseLeave:()=>this.setState({hoverCard:-1}),onClick:room.revealed?undefined:()=>this.vote(card)},
+        React.createElement('div',{style:face},
+          React.createElement('div',{style:orn},'✦'),
+          React.createElement('div',{style:{fontFamily:"'Playfair Display',serif",fontWeight:900,fontSize:card.length>2?'22px':'30px',lineHeight:1}},card),
+          React.createElement('div',{style:orn},'✦')
+        )
+      );
+    });
+  }
+
+  renderVals(){
+    const s=this.state;
+    const joined=s.joined;
+    const room=s.room;
+    const view = !joined ? (s.urlRoom?'join':'lobby') : (room && room.started ? 'game' : 'waiting');
+    const deck=this.resolvedDeck();
+    const players=room?Object.values(room.players):[];
+    const total=players.length;
+    const votedCount=players.filter(p=>p.vote!=null).length;
+    const allVoted=total>0 && votedCount===total;
+    const revealed=!!(room&&room.revealed);
+    const res=revealed&&room?this.computeResult(room):null;
+    const myVote=room&&room.players[this.pid]?room.players[this.pid].vote:null;
+
+    let showBar=false, resultPct='0%', minLabel='', maxLabel='';
+    if(res && room){
+      const nums=room.cards.map(c=>c==='½'?0.5:(/^[0-9]+(\.[0-9]+)?$/.test(c)?Number(c):null)).filter(n=>n!=null);
+      const val=Number(res.value);
+      if(room.deckType!=='tshirt' && nums.length>=2 && !isNaN(val)){
+        const mn=Math.min(...nums), mx=Math.max(...nums);
+        const pct=Math.max(0,Math.min(1,(val-mn)/(mx-mn)));
+        showBar=true; resultPct=(pct*100).toFixed(1)+'%';
+        minLabel=String(mn===0.5?'½':mn); maxLabel=String(mx);
+      }
+    }
+
+    const playerList=room?Object.entries(room.players).map(([id,p])=>{
+      const me=id===this.pid;
+      return {
+        id,
+        initials:(p.name||'?').trim().split(/\s+/).map(w=>w[0]||'').slice(0,2).join('').toUpperCase()||'?',
+        label:p.name+(me?' (you)':''),
+        avatarBorder:me?'2px solid rgba(200,146,42,0.85)':'2px solid rgba(200,146,42,0.4)',
+        avatarGlow:me?'0 0 18px rgba(200,146,42,0.3)':'0 4px 12px rgba(0,0,0,0.5)',
+        nameColor:me?'#c8922a':'#e8d5a3',
+      };
+    }):[];
+
+    return {
+      title: this.props.brand ?? "Dead Man's Poker",
+      subtitle: this.props.tagline ?? 'Estimation Saloon',
+      isLobby: view==='lobby', isJoin: view==='join', isWaiting: view==='waiting', isGame: view==='game',
+      nameInput: s.nameInput,
+      onName: (e)=>this.setState({nameInput:e.target.value, error:''}),
+      deckType: deck,
+      onDeck: (e)=>this.setState({deckType:e.target.value}),
+      deckOptions: this.deckOptions,
+      previewCards: this.decks[deck],
+      error: s.error,
+      roomCode: s.urlRoom,
+      onCreate: ()=>this.createRoom(),
+      onJoin: ()=>this.joinRoom(),
+      roomId: s.roomId,
+      round: room?room.round:1,
+      inviteLink: this.inviteLink(),
+      onCopy: ()=>this.copyInvite(),
+      copyLabel: s.copied?'Copied!':'Copy Invite',
+      copyShort: s.copied?'Copied':'Link',
+      playerList,
+      onStart: ()=>this.startGame(),
+      onLeave: ()=>this.leave(),
+      onReveal: ()=>this.reveal(),
+      onNewRound: ()=>this.newRound(),
+      votedCount, total,
+      revealed,
+      showReveal: !revealed && allVoted,
+      showWaiting: !revealed && !allVoted,
+      resultValue: res?res.value:'',
+      resultSub: res?res.sub:'',
+      allSame: res?res.allSame:false,
+      showBar, resultPct, minLabel, maxLabel,
+      handCaption: revealed ? 'Cards on the table' : (myVote!=null ? 'Your bet: '+myVote+' — tap another to change' : 'Your hand — choose your bet'),
+      seatsEl: room?this.buildSeats(room):null,
+      fanEl: room?this.buildFan(room):null,
+    };
+  }
+}
+</script>
+</body>
+</html>
