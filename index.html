@@ -217,6 +217,7 @@ select.field option{background:#1a1108}
       <span class="game-bar-sep">✦</span>
       <span class="game-bar-muted" id="game-votes-count"></span>
       <span class="game-bar-spacer"></span>
+      <span class="game-bar-muted" id="game-pid-debug" style="font-size:9px;opacity:.4"></span>
       <button class="btn btn-gold btn-sm" id="game-copy-btn">Link</button>
       <button class="btn btn-red btn-sm" id="game-leave-btn">Leave</button>
     </div>
@@ -255,6 +256,7 @@ let currentRoom = null;
 let currentRoomId = null;
 let realtimeSub = null;
 let copiedTimer = null;
+let votingLocked = false;
 
 // ── URL param ──────────────────────────────────────────────────────────
 const urlRoom = new URLSearchParams(location.search).get('room');
@@ -292,7 +294,7 @@ function subscribeRoom(id) {
         }
         const room = await loadRoom(id);
         if (!room) { goLobby(); return; }
-        if (room.players && !room.players[pid]) { goLobby(); return; }
+        if (room.players && !room.players[pid]) { console.log('realtime: pid not in room, going lobby. pid=', pid, 'players=', Object.keys(room.players)); goLobby(); return; }
         currentRoom = room;
         if (room.started) {
           showGame();
@@ -466,6 +468,11 @@ function renderGame() {
 
   // bar
   document.getElementById('game-round').textContent = 'Round ' + (room.round || 1);
+  const pidDebug = document.getElementById('game-pid-debug');
+  if (pidDebug) {
+    const myEntry = room.players[pid];
+    pidDebug.textContent = myEntry ? ('me: ' + myEntry.name) : ('pid missing! ' + pid.slice(-6));
+  }
   document.getElementById('game-table-id').textContent = 'Table ' + currentRoomId;
   document.getElementById('game-votes-count').textContent = votedCount + '/' + total + ' Bets';
 
@@ -595,17 +602,32 @@ async function doVote(card) {
 }
 
 async function doReveal() {
-  const room = await updateRoom(currentRoomId, r => { r.revealed = true; });
-  if (room) { currentRoom = room; renderGame(); }
+  if (votingLocked) return;
+  votingLocked = true;
+  currentRoom.revealed = true;
+  renderGame();
+  try {
+    await updateRoom(currentRoomId, r => { r.revealed = true; });
+  } catch(e) { console.error('doReveal failed:', e); }
+  finally { votingLocked = false; }
 }
 
 async function doNewRound() {
-  const room = await updateRoom(currentRoomId, r => {
-    r.revealed = false;
-    r.round = (r.round || 1) + 1;
-    Object.values(r.players).forEach(p => p.vote = null);
-  });
-  if (room) { currentRoom = room; renderGame(); }
+  if (votingLocked) return;
+  votingLocked = true;
+  currentRoom.revealed = false;
+  currentRoom.round = (currentRoom.round || 1) + 1;
+  Object.values(currentRoom.players).forEach(p => p.vote = null);
+  renderGame();
+  try {
+    const round = currentRoom.round;
+    await updateRoom(currentRoomId, r => {
+      r.revealed = false;
+      r.round = round;
+      Object.values(r.players).forEach(p => p.vote = null);
+    });
+  } catch(e) { console.error('doNewRound failed:', e); }
+  finally { votingLocked = false; }
 }
 
 async function leaveRoom() {
