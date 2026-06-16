@@ -245,11 +245,14 @@ const DECKS = {
 };
 
 // ── Player ID ──────────────────────────────────────────────────────────
-let pid = sessionStorage.getItem('dmp_pid');
+// Use localStorage so pid survives page navigation (history.replaceState triggers full reload on some browsers)
+let pid = localStorage.getItem('dmp_pid');
 if (!pid) {
   pid = 'p' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-  sessionStorage.setItem('dmp_pid', pid);
+  localStorage.setItem('dmp_pid', pid);
 }
+// Sync to sessionStorage as backup
+sessionStorage.setItem('dmp_pid', pid);
 
 // ── App state ──────────────────────────────────────────────────────────
 let currentRoom = null;
@@ -259,7 +262,15 @@ let copiedTimer = null;
 let votingLocked = false;
 
 // ── URL param ──────────────────────────────────────────────────────────
-const urlRoom = new URLSearchParams(location.search).get('room');
+// Support both ?room=X (old links) and #room=X (new links)
+function getRoomFromUrl() {
+  const qp = new URLSearchParams(location.search).get('room');
+  if (qp) return qp.toUpperCase();
+  const hash = location.hash.replace('#','');
+  if (hash && hash.length === 6) return hash.toUpperCase();
+  return null;
+}
+const urlRoom = getRoomFromUrl();
 
 // ── DB helpers ──────────────────────────────────────────────────────────
 async function loadRoom(id) {
@@ -275,11 +286,19 @@ async function deleteRoom(id) {
   await sb.from('rooms').delete().eq('id', id);
 }
 async function updateRoom(id, fn) {
-  const room = await loadRoom(id);
-  if (!room) return null;
-  fn(room);
-  await saveRoom(id, room);
-  return room;
+  // Retry up to 3 times to handle concurrent writes
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const room = await loadRoom(id);
+    if (!room) return null;
+    fn(room);
+    const { error } = await sb.from('rooms').upsert(
+      { id, state: room, updated_at: new Date().toISOString() }
+    );
+    if (!error) return room;
+    console.warn('updateRoom attempt', attempt+1, 'failed:', error.message);
+    await new Promise(r => setTimeout(r, 100 * (attempt + 1)));
+  }
+  return null;
 }
 
 // ── Realtime ────────────────────────────────────────────────────────────
@@ -316,7 +335,7 @@ function showOnly(id) {
 function goLobby() {
   if (realtimeSub) { sb.removeChannel(realtimeSub); realtimeSub = null; }
   currentRoom = null; currentRoomId = null;
-  try { history.replaceState({}, '', location.pathname); } catch(e){}
+  try { history.replaceState({}, '', location.pathname + location.search.replace(/[?&]room=[^&]*/,'')); location.hash = ''; } catch(e){}
   showOnly('screen-lobby');
 }
 
@@ -361,7 +380,7 @@ async function createRoom() {
   };
 
   await saveRoom(id, room);
-  try { history.replaceState({}, '', '?room=' + id); } catch(e){}
+  try { location.hash = id; } catch(e){}
 
   currentRoomId = id;
   currentRoom = room;
@@ -433,7 +452,7 @@ function renderWaiting() {
     </div>`;
   }).join('');
 
-  const link = location.origin + location.pathname + '?room=' + currentRoomId;
+  const link = location.origin + location.pathname + '#' + currentRoomId;
   document.getElementById('waiting-invite-input').value = link;
 }
 
@@ -482,8 +501,13 @@ function renderGame() {
   wrap.querySelectorAll('.seat').forEach(s => s.remove());
 
   const cx = 450, cy = 240, rx = 380, ry = 190;
+  // Rotate so current player (pid) always sits at the bottom center
+  const myIndex = players.findIndex(([id]) => id === pid);
+  const rotationOffset = myIndex >= 0 ? myIndex : 0;
   players.forEach(([id, p], i) => {
-    const angle = -Math.PI/2 + i * 2 * Math.PI / players.length;
+    // Remap index so current player is at bottom (angle = PI/2)
+    const rotated = (i - rotationOffset + players.length) % players.length;
+    const angle = Math.PI/2 + rotated * 2 * Math.PI / players.length;
     const x = cx + rx * Math.cos(angle);
     const y = cy + ry * Math.sin(angle);
     const me = id === pid;
@@ -647,7 +671,7 @@ async function leaveRoom() {
 }
 
 async function copyLink(btnId) {
-  const link = location.origin + location.pathname + '?room=' + currentRoomId;
+  const link = location.origin + location.pathname + '#' + currentRoomId;
   try { await navigator.clipboard.writeText(link); } catch(e){}
   const btn = document.getElementById(btnId);
   if (!btn) return;
