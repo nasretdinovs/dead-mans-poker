@@ -257,6 +257,7 @@ sessionStorage.setItem('dmp_pid', pid);
 // ── App state ──────────────────────────────────────────────────────────
 let currentRoom = null;
 let currentRoomId = null;
+let currentVotes = {}; // player_id -> { name, vote, joinedAt } — mirrored onto currentRoom.players
 let realtimeSub = null;
 let copiedTimer = null;
 let votingLocked = false;
@@ -285,11 +286,33 @@ async function saveRoom(id, room) {
 async function deleteRoom(id) {
   await sb.from('rooms').delete().eq('id', id);
 }
+async function loadVotes(roomId) {
+  const { data, error } = await sb.from('votes').select('player_id, name, vote, joined_at').eq('room_id', roomId);
+  if (error || !data) return [];
+  return data;
+}
+function votesToPlayers(rows) {
+  const players = {};
+  rows.forEach(r => { players[r.player_id] = { name: r.name, vote: r.vote, joinedAt: new Date(r.joined_at).getTime() }; });
+  return players;
+}
+async function insertVoteRow(roomId, playerId, name) {
+  const { error } = await sb.from('votes').insert({ room_id: roomId, player_id: playerId, name, vote: null });
+  if (error) console.error('insertVoteRow error', error);
+}
+async function renameVoteRow(roomId, playerId, name) {
+  const { error } = await sb.from('votes').update({ name }).eq('room_id', roomId).eq('player_id', playerId);
+  if (error) console.error('renameVoteRow error', error);
+}
 async function setVote(id, playerId, vote) {
-  const { data, error } = await sb.rpc('set_player_vote', { p_room_id: id, p_pid: playerId, p_vote: vote });
+  const { data, error } = await sb.rpc('set_vote', { p_room_id: id, p_player_id: playerId, p_vote: vote });
   if (error) { console.error('setVote error', error); return false; }
-  if (data == null) { console.warn('setVote: room or player not found'); return false; }
+  if (data !== true) { console.warn('setVote: room or player not found'); return false; }
   return true;
+}
+async function clearVotes(id) {
+  const { error } = await sb.rpc('clear_votes', { p_room_id: id });
+  if (error) console.error('clearVotes error', error);
 }
 async function updateRoom(id, fn) {
   // Retry up to 3 times to handle concurrent writes
@@ -309,6 +332,10 @@ async function updateRoom(id, fn) {
 
 // ── Realtime ────────────────────────────────────────────────────────────
 let lastAppliedUpdatedAt = null;
+function renderAfterChange() {
+  if (!currentRoom) return;
+  if (currentRoom.started) { showGame(); } else { renderWaiting(); }
+}
 function subscribeRoom(id) {
   if (realtimeSub) { sb.removeChannel(realtimeSub); realtimeSub = null; }
   lastAppliedUpdatedAt = null;
@@ -323,14 +350,26 @@ function subscribeRoom(id) {
         if (!row || !row.state) return;
         if (lastAppliedUpdatedAt && row.updated_at && row.updated_at <= lastAppliedUpdatedAt) return;
         lastAppliedUpdatedAt = row.updated_at || lastAppliedUpdatedAt;
-        const room = row.state;
-        if (room.players && !room.players[pid]) { goLobby(); return; }
-        currentRoom = room;
-        if (room.started) {
-          showGame();
+        if (!currentRoom) return;
+        Object.assign(currentRoom, row.state);
+        currentRoom.players = currentVotes;
+        renderAfterChange();
+      }
+    )
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'votes', filter: 'room_id=eq.' + id },
+      (payload) => {
+        if (payload.eventType === 'DELETE') {
+          const oldRow = payload.old;
+          if (oldRow && oldRow.player_id) delete currentVotes[oldRow.player_id];
         } else {
-          renderWaiting();
+          const row = payload.new;
+          if (!row) return;
+          currentVotes[row.player_id] = { name: row.name, vote: row.vote, joinedAt: new Date(row.joined_at).getTime() };
         }
+        if (!currentRoom) return;
+        currentRoom.players = currentVotes;
+        if (!currentVotes[pid]) { goLobby(); return; }
+        renderAfterChange();
       }
     )
     .subscribe();
@@ -345,7 +384,7 @@ function showOnly(id) {
 
 function goLobby() {
   if (realtimeSub) { sb.removeChannel(realtimeSub); realtimeSub = null; }
-  currentRoom = null; currentRoomId = null;
+  currentRoom = null; currentRoomId = null; currentVotes = {};
   try { history.replaceState({}, '', location.pathname + location.search.replace(/[?&]room=[^&]*/,'')); location.hash = ''; } catch(e){}
   showOnly('screen-lobby');
 }
@@ -384,17 +423,19 @@ async function createRoom() {
   const room = {
     deckType,
     cards: DECKS[deckType],
-    players: { [pid]: { name, vote: null, joinedAt: Date.now() } },
     revealed: false,
     round: 1,
     started: false,
   };
 
   await saveRoom(id, room);
+  await insertVoteRow(id, pid, name);
   try { location.hash = id; } catch(e){}
 
   currentRoomId = id;
+  currentVotes = { [pid]: { name, vote: null, joinedAt: Date.now() } };
   currentRoom = room;
+  currentRoom.players = currentVotes;
   subscribeRoom(id);
   renderWaiting();
 
@@ -427,23 +468,29 @@ async function joinRoom() {
     return;
   }
 
-  const isRejoin = !!room.players[pid];
-  if (!isRejoin) {
-    const taken = Object.entries(room.players || {})
-      .some(([otherPid, p]) => otherPid !== pid && p.name.toLowerCase() === name.toLowerCase());
+  const votesRows = await loadVotes(urlRoom);
+  const existing = votesRows.find(r => r.player_id === pid);
+
+  if (!existing) {
+    const taken = votesRows.some(r => r.player_id !== pid && r.name.toLowerCase() === name.toLowerCase());
     if (taken) {
       showError(errEl, 'That name is already at the table.');
       btn.textContent = 'Join the Table'; btn.disabled = false;
       return;
     }
-    room.players[pid] = { name, vote: null, joinedAt: Date.now() };
-  } else {
-    room.players[pid].name = name;
+    await insertVoteRow(urlRoom, pid, name);
+  } else if (existing.name !== name) {
+    await renameVoteRow(urlRoom, pid, name);
   }
-  await saveRoom(urlRoom, room);
+
+  currentVotes = votesToPlayers(votesRows);
+  currentVotes[pid] = existing
+    ? { name, vote: existing.vote, joinedAt: new Date(existing.joined_at).getTime() }
+    : { name, vote: null, joinedAt: Date.now() };
 
   currentRoomId = urlRoom;
   currentRoom = room;
+  currentRoom.players = currentVotes;
   subscribeRoom(urlRoom);
 
   if (room.started) { showGame(); } else { renderWaiting(); }
@@ -479,7 +526,7 @@ function initWaitingButtons() {
     const btn = document.getElementById('waiting-start-btn');
     btn.disabled = true; btn.textContent = 'Starting…';
     const room = await updateRoom(currentRoomId, r => { r.started = true; });
-    if (room) { currentRoom = room; showGame(); }
+    if (room) { currentRoom = room; currentRoom.players = currentVotes; showGame(); }
     btn.disabled = false; btn.textContent = 'Start the Game';
   });
   document.getElementById('waiting-leave-btn').addEventListener('click', leaveRoom);
@@ -678,8 +725,8 @@ async function doNewRound() {
     await updateRoom(currentRoomId, r => {
       r.revealed = false;
       r.round = round;
-      Object.values(r.players).forEach(p => p.vote = null);
     });
+    await clearVotes(currentRoomId);
   } catch(e) { console.error('doNewRound failed:', e); }
   finally { votingLocked = false; }
 }
@@ -687,15 +734,9 @@ async function doNewRound() {
 async function leaveRoom() {
   const id = currentRoomId;
   if (id) {
-    const room = await loadRoom(id);
-    if (room) {
-      delete room.players[pid];
-      if (Object.keys(room.players).length === 0) {
-        await deleteRoom(id);
-      } else {
-        await saveRoom(id, room);
-      }
-    }
+    await sb.from('votes').delete().eq('room_id', id).eq('player_id', pid);
+    const remaining = await loadVotes(id);
+    if (remaining.length === 0) { await deleteRoom(id); }
   }
   goLobby();
 }

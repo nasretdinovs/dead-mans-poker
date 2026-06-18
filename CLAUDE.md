@@ -12,23 +12,22 @@ Single HTML file deployed on GitHub Pages.
 ## Supabase
 - **URL:** `https://xlxkgcbckbjppatmirhc.supabase.co`
 - **Anon key:** `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhseGtnY2Jja2JqcHBhdG1pcmhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE1NTQ5MjYsImV4cCI6MjA5NzEzMDkyNn0.ZOTi9xvHdTrdsmsIhR8a-V_YVw1NwoxTQkPbjpwapWQ`
-- **Table:** `rooms` with fields `id text PK`, `state jsonb`, `updated_at timestamptz`
-- **RLS:** enabled, anon policies for select/insert/update/delete
-- **Full schema/RLS/RPC/realtime setup:** `db/supabase_setup.sql` — single idempotent-ish script (drops and recreates `rooms`) that is the source of truth for the whole Supabase side. Re-run it any time the dashboard config is suspected to be wrong/drifted.
+- **Table `rooms`:** `id text PK`, `state jsonb` (room-level metadata only — no longer holds players), `updated_at timestamptz`
+- **Table `votes`:** `room_id text` (FK → `rooms.id` on delete cascade), `player_id text`, `name text`, `vote text` (nullable), `joined_at timestamptz`; primary key `(room_id, player_id)`. One row per player per room — a vote write is a single-row atomic `UPDATE`, never a read-modify-write of a shared blob.
+- **RLS:** enabled on both tables, anon policies for select/insert/update/delete
+- **Full schema/RLS/RPC/realtime setup:** `db/supabase_setup.sql` — single script (drops and recreates `rooms` + `votes`) that is the source of truth for the whole Supabase side. Re-run it any time the dashboard config is suspected to be wrong/drifted.
 
-## DB state shape (jsonb field `state`)
+## DB state shape (jsonb field `rooms.state`)
 ```json
 {
   "deckType": "fibonacci",
   "cards": ["1","2","3","5","8","13","21","34","55","89"],
-  "players": {
-    "p<uuid>": { "name": "Alice", "vote": null, "joinedAt": 1234567890 }
-  },
   "revealed": false,
   "round": 1,
   "started": false
 }
 ```
+Per-player data (`name`, `vote`, `joinedAt`) lives in the `votes` table, not in this blob. Client-side, `currentVotes` (keyed by `player_id`) is the live in-memory mirror of that table, and `currentRoom.players` is always pointed at the same object (`currentRoom.players = currentVotes`) so `renderWaiting()`/`renderGame()`/`computeResult()` can keep reading `room.players` unchanged.
 
 ## Player identification
 - `pid` stored in `localStorage` (key `dmp_pid`)
@@ -49,10 +48,10 @@ Single HTML file deployed on GitHub Pages.
 Screen switching via `showOnly(id)` — just `display:none/block`, no DOM recreation.
 
 ## Realtime
-- Supabase `postgres_changes` on `rooms` table, filtered by `id`
-- On any change: read `payload.new.state` directly (no extra `loadRoom()` round-trip) → update `currentRoom` → `renderWaiting()` or `renderGame()`
-- A module-level `lastAppliedUpdatedAt` guards against out-of-order event delivery (compares `payload.new.updated_at` as ISO-8601 strings; ignores anything not newer than what's already applied)
-- Channel name: `room:ROOMID`
+- One channel (`room:ROOMID`) subscribed to `postgres_changes` on **both** `rooms` (filtered by `id`) and `votes` (filtered by `room_id`)
+- `rooms` events: read `payload.new.state` directly (no extra `loadRoom()` round-trip), merge onto `currentRoom` via `Object.assign`, keep `currentRoom.players` pointed at `currentVotes`. A module-level `lastAppliedUpdatedAt` guards against out-of-order event delivery (compares `payload.new.updated_at` as ISO-8601 strings; ignores anything not newer than what's already applied).
+- `votes` events: apply the single changed row directly into `currentVotes` (INSERT/UPDATE → `currentVotes[row.player_id] = {...}`; DELETE → `delete currentVotes[payload.old.player_id]`) — no extra `loadVotes()` round-trip, no ordering race, since each event is applied independently and idempotently.
+- Both handlers call a shared `renderAfterChange()` that picks `showGame()` vs `renderWaiting()` based on `currentRoom.started`.
 
 ## Decks
 ```js
@@ -71,24 +70,25 @@ hours:      ['1','2','4','8','16','24','32','40']
 - Last player to leave deletes the room from DB
 
 ## Key functions
-- `createRoom()` — generates 6-char ID, saves to Supabase, sets hash
-- `joinRoom()` — reads `urlRoom` from hash/query; if `pid` already has an entry in `room.players` this is a **rejoin** (e.g. after a page reload) and skips the name-collision check, only updating `name` and preserving the existing `vote`/`joinedAt`; otherwise it's a new player and the name-collision check excludes the caller's own `pid`
-- `subscribeRoom(id)` — sets up Realtime channel
-- `renderWaiting()` — updates waiting screen innerHTML
-- `renderGame()` — updates game screen: seats, center area, hand cards
-- `doVote(card)` — optimistic local update + `setVote()` RPC call, rolls back + toast on failure
-- `setVote(id, playerId, vote)` — calls the `set_player_vote` Postgres RPC (atomic `jsonb_set` on `rooms.state`), avoids the read-modify-write race that plain `updateRoom` has when multiple players vote concurrently
-- `doReveal()` — optimistic update + server write
-- `doNewRound()` — optimistic update + server write
-- `updateRoom(id, fn)` — load → mutate → upsert, retries up to 3x; still used for single-actor actions (reveal/new round/start/join/leave) where the lost-update race doesn't apply
-- `leaveRoom()` — removes pid from players, deletes room if empty
+- `createRoom()` — generates 6-char ID, saves room metadata to `rooms`, inserts the host's row into `votes` via `insertVoteRow()`
+- `joinRoom()` — reads `urlRoom` from hash/query, loads `votes` rows via `loadVotes()`; if a row for `pid` already exists this is a **rejoin** (e.g. after a page reload) — skips the name-collision check, only renaming via `renameVoteRow()`, preserving the existing `vote`/`joinedAt`; otherwise it's a new player, the name-collision check excludes the caller's own `pid`, and a new row is inserted
+- `subscribeRoom(id)` — sets up the Realtime channel covering both `rooms` and `votes`
+- `renderWaiting()` / `renderGame()` — read `room.players` (= `currentVotes`) exactly as before; unaware that the data now comes from a separate table
+- `doVote(card)` — optimistic local update of `currentVotes[pid].vote` + `setVote()` RPC call, rolls back + toast on failure
+- `setVote(id, playerId, vote)` — calls the `set_vote` Postgres RPC, a plain single-row `UPDATE votes ... WHERE room_id = ... AND player_id = ...`; returns `true`/`false` (row found or not) so the client can roll back
+- `clearVotes(id)` — calls the `clear_votes` RPC (`UPDATE votes SET vote = NULL WHERE room_id = ...`), used by `doNewRound()`
+- `doReveal()` — optimistic update + server write (room metadata only, `updateRoom`)
+- `doNewRound()` — optimistic local reset of all `currentVotes[*].vote` + `updateRoom()` for `revealed`/`round` + `clearVotes()` RPC for the actual vote reset
+- `updateRoom(id, fn)` — load → mutate → upsert `rooms.state` (now metadata-only, no `players` key), retries up to 3x; used for single-actor room-level actions (reveal/new round/start)
+- `leaveRoom()` — deletes the caller's row from `votes`; if no rows remain for the room, deletes the room too
 - `showVoteError(msg)` — bottom-of-screen toast for failed vote writes
 
 ## State variables
 ```js
 let pid            // player ID from localStorage
-let currentRoom    // current room state object
+let currentRoom    // current room metadata, with .players always === currentVotes
 let currentRoomId  // current room ID string
+let currentVotes   // player_id -> { name, vote, joinedAt }, mirrors the `votes` table
 let realtimeSub    // Supabase realtime channel
 let votingLocked   // mutex flag to prevent double-votes
 let copiedTimer    // timeout for "Copied!" button feedback
@@ -102,14 +102,15 @@ const urlRoom      // room ID parsed from URL on page load
 - Hover triggered re-render → removed `hoverCard` from state, pure CSS `:hover` now
 - Seating didn't respect player perspective → added `rotationOffset` based on `myIndex`
 - **Clicking a card appeared to do nothing** — `doVote()` had no optimistic UI update; it awaited a full network round-trip (`updateRoom`'s read-modify-write, up to 3 retries) before re-rendering. Fixed by mutating local state and calling `renderGame()` immediately on click, then writing to the server in the background with rollback + toast (`showVoteError`) on failure.
-- **Second player was voting for everyone (lost-update race)** — the old retry logic in `updateRoom` only retried on *upsert errors*, not on stale reads, so concurrent votes from two players could have the later write silently overwrite the earlier player's vote (both started from the same stale `rooms.state` blob). Fixed by routing `doVote` through a new `set_player_vote` Postgres RPC that does an atomic `UPDATE ... SET state = jsonb_set(...)` directly in Postgres — concurrent updates to the same row are serialized by Postgres, so no vote is lost. Requires the SQL function to be created once in the Supabase SQL editor (see `db/supabase_setup.sql`).
+- **Second player was voting for everyone (lost-update race)** — the old retry logic in `updateRoom` only retried on *upsert errors*, not on stale reads, so concurrent votes from two players could have the later write silently overwrite the earlier player's vote (both started from the same stale `rooms.state` blob). First fixed with a `set_player_vote` RPC doing atomic `jsonb_set` on the shared blob (superseded, see below); the real fix is the `votes` table split — each player's vote is now its own row, so there's no shared blob to race over at all.
+- **~15s update delay + flip-flopping/resets** — `subscribeRoom()`'s event handler used to call `await loadRoom(id)` (a fresh `SELECT`) on every single realtime event instead of using the row already delivered in `payload.new`; concurrent `loadRoom()` calls from rapid back-to-back events had no ordering guarantee, so a slower-but-earlier fetch could resolve after a faster-but-later one and overwrite fresher state with stale state. Fixed by reading `payload.new` directly for both `rooms` and `votes` events (no extra query, no race) — see the `votes`-table migration below, which is also what made the `rooms` blob small enough that this stopped being a meaningful bottleneck on its own.
+- **Backend hardened: jsonb blob → dedicated `votes` table** — `rooms.state.players` (a single jsonb map mutated via read-modify-write or `jsonb_set`) was replaced with a `votes` table, one row per player per round-trip-free atomic `UPDATE`. `set_player_vote` (jsonb RPC) was replaced by `set_vote`/`clear_votes` (plain-column RPCs). Realtime now subscribes to both tables on one channel; `votes` events are applied incrementally into the client-side `currentVotes` map rather than re-fetched, avoiding the same kind of ordering race fixed above. `rooms.state` is now metadata-only (`deckType`, `cards`, `revealed`, `round`, `started`), so every `updateRoom()` upsert is smaller and never touches contended per-player data.
 - **Reload/rejoin self-blocked ("That name is already at the table")** — `initJoin()` always shows the Join screen for any visit to a room URL, including reloads of an already-joined player/host. `joinRoom()`'s name-collision check used to compare against *all* players including the caller's own existing entry (same `pid`, same `localStorage`), so any reload permanently locked that player out of their own room — looked exactly like "can't select any cards" since they were stuck on the Join screen, not the game screen. Fixed by detecting `isRejoin = !!room.players[pid]` and skipping the collision check entirely for rejoins (only the name field is refreshed; `vote`/`joinedAt` are preserved). New players still get the collision check, now explicitly excluding their own `pid` from the comparison.
 
 ## Open issues
-- The whole-room-as-one-jsonb-blob model is still used for room metadata (deck, revealed, round, started) and is a planned target for a `votes` table split in a later refactor — see project history for the planned `votes` table migration that would remove `jsonb_set` entirely.
-- `renderGame()` still fully tears down and rebuilds the seats/hand-card DOM on every render (cosmetic jank, not breakage) — deferred to the same future refactor.
-- Verify in the Supabase dashboard (Database → Replication) that Realtime is actually enabled for the `rooms` table — if not, `postgres_changes` never fires and players never see each other's votes update without a manual reload, which independently looks like "everything is out of sync."
-- **~15s update delay + flip-flopping/resets after Realtime was confirmed working** — `subscribeRoom()`'s event handler used to call `await loadRoom(id)` (a fresh `SELECT`) on every single realtime event instead of using the row already delivered in `payload.new`. Two problems: (1) every vote added a full extra DB round-trip before anything rendered: (2) concurrent `loadRoom()` calls triggered by rapid back-to-back events had no ordering guarantee, so a slower-but-earlier fetch could resolve after a faster-but-later one and silently overwrite fresher state with stale state — looked exactly like cards resetting/flip-flopping with no further user action. Fixed by reading `payload.new.state` directly (synchronous, no extra query) plus a `lastAppliedUpdatedAt` monotonic guard that drops any event whose `updated_at` isn't newer than what's already applied.
+- `renderGame()` still fully tears down and rebuilds the seats/hand-card DOM on every render (cosmetic jank, not breakage) — deferred to a future Vite/module-split refactor (not started).
+- Verify in the Supabase dashboard (Database → Replication) that Realtime is enabled for **both** `rooms` and `votes` — `db/supabase_setup.sql` does this via `alter publication supabase_realtime add table ...`, but worth re-checking after any manual dashboard changes.
+- If delay/instability returns: check the browser DevTools Network → WS tab for reconnect loops, and rule out a Supabase free-tier cold start, before assuming it's a code regression — the known code-level causes (whole-blob race, extra-query realtime race) are fixed as of the `votes` table migration above.
 
 ## Design tokens
 - **Fonts:** Cinzel Decorative (title), Cinzel (UI labels), Cormorant Garamond (body), Playfair Display (card numbers)
