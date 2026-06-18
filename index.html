@@ -285,6 +285,12 @@ async function saveRoom(id, room) {
 async function deleteRoom(id) {
   await sb.from('rooms').delete().eq('id', id);
 }
+async function setVote(id, playerId, vote) {
+  const { data, error } = await sb.rpc('set_player_vote', { p_room_id: id, p_pid: playerId, p_vote: vote });
+  if (error) { console.error('setVote error', error); return false; }
+  if (data == null) { console.warn('setVote: room or player not found'); return false; }
+  return true;
+}
 async function updateRoom(id, fn) {
   // Retry up to 3 times to handle concurrent writes
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -619,10 +625,23 @@ function initGameButtons() {
 // ── Actions ─────────────────────────────────────────────────────────────
 async function doVote(card) {
   if (!currentRoom || currentRoom.revealed) return;
-  const room = await updateRoom(currentRoomId, r => {
-    if (r.players[pid]) r.players[pid].vote = card;
-  });
-  if (room) { currentRoom = room; renderGame(); }
+  if (!currentRoom.players[pid]) return;
+
+  const previousVote = currentRoom.players[pid].vote;
+  if (previousVote === card) return;
+
+  currentRoom.players[pid].vote = card;
+  renderGame();
+
+  const ok = await setVote(currentRoomId, pid, card);
+
+  if (!ok) {
+    if (currentRoom && currentRoom.players[pid]) {
+      currentRoom.players[pid].vote = previousVote;
+    }
+    showVoteError('Your bet did not land — try again, partner.');
+    renderGame();
+  }
 }
 
 async function doReveal() {
@@ -684,6 +703,19 @@ async function copyLink(btnId) {
 // ── Helpers ──────────────────────────────────────────────────────────────
 function showError(el, msg) {
   el.textContent = msg; el.style.display = 'block';
+}
+function showVoteError(msg) {
+  let el = document.getElementById('vote-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'vote-toast';
+    el.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#3a1010;color:#e8d5a3;border:1px solid rgba(180,130,60,.4);border-radius:6px;padding:10px 18px;font-family:Cormorant Garamond,serif;font-size:15px;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,.6)';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.display = 'none'; }, 3000);
 }
 function escHtml(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
