@@ -76,16 +76,13 @@ $func$;
 
 grant execute on function set_vote(text, text, text) to anon;
 
--- Used by "New Round" to reset every player's vote in one statement.
-create or replace function clear_votes(p_room_id text)
-returns void
-language sql
-security invoker
-as $func$
-  update votes set vote = null where room_id = p_room_id;
-$func$;
-
-grant execute on function clear_votes(text) to anon;
+-- Note: there is deliberately no "clear all votes" RPC. "New Round" is
+-- implemented as every connected client independently resetting only its
+-- OWN vote row when it notices the room's `round` changed (see
+-- `maybeResetOwnVoteForNewRound` in index.html). A blanket "set every row's
+-- vote to null" write would race with anyone voting for the new round while
+-- that write is still in flight, silently wiping their fresh vote — single
+-- writer per row is the invariant that keeps `votes` race-free.
 
 -- 5. Realtime ----------------------------------------------------------------
 -- Required so other players see vote/room changes without a manual reload.
@@ -107,6 +104,6 @@ alter publication supabase_realtime add table votes;
 -- insert into votes (room_id, player_id, name, vote) values ('TEST01', 'p1', 'Test', null);
 -- select set_vote('TEST01', 'p1', '5');           -- should return true
 -- select set_vote('TEST01', 'p_missing', '5');    -- should return false
--- select clear_votes('TEST01');
+-- select set_vote('TEST01', 'p1', null);           -- own-row reset, should return true
 -- select * from votes where room_id = 'TEST01';   -- vote should be null again
 -- delete from rooms where id = 'TEST01';           -- cascades and deletes the votes row too

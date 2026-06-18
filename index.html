@@ -261,6 +261,19 @@ let currentVotes = {}; // player_id -> { name, vote, joinedAt } — mirrored ont
 let realtimeSub = null;
 let copiedTimer = null;
 let votingLocked = false;
+let lastSeenRound = null;
+
+// Each player resets only THEIR OWN vote row when they notice the round
+// changed — never another player's row. A shared "clear all votes" write
+// would race with anyone voting for the new round while that write is
+// still in flight, silently wiping their fresh vote.
+function maybeResetOwnVoteForNewRound(newRound) {
+  if (lastSeenRound !== null && newRound !== lastSeenRound && currentVotes[pid]) {
+    currentVotes[pid].vote = null;
+    setVote(currentRoomId, pid, null);
+  }
+  lastSeenRound = newRound;
+}
 
 // ── URL param ──────────────────────────────────────────────────────────
 // Support both ?room=X (old links) and #room=X (new links)
@@ -310,10 +323,6 @@ async function setVote(id, playerId, vote) {
   if (data !== true) { console.warn('setVote: room or player not found'); return false; }
   return true;
 }
-async function clearVotes(id) {
-  const { error } = await sb.rpc('clear_votes', { p_room_id: id });
-  if (error) console.error('clearVotes error', error);
-}
 async function updateRoom(id, fn) {
   // Retry up to 3 times to handle concurrent writes
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -353,6 +362,7 @@ function subscribeRoom(id) {
         if (!currentRoom) return;
         Object.assign(currentRoom, row.state);
         currentRoom.players = currentVotes;
+        maybeResetOwnVoteForNewRound(currentRoom.round);
         renderAfterChange();
       }
     )
@@ -384,7 +394,7 @@ function showOnly(id) {
 
 function goLobby() {
   if (realtimeSub) { sb.removeChannel(realtimeSub); realtimeSub = null; }
-  currentRoom = null; currentRoomId = null; currentVotes = {};
+  currentRoom = null; currentRoomId = null; currentVotes = {}; lastSeenRound = null;
   try { history.replaceState({}, '', location.pathname + location.search.replace(/[?&]room=[^&]*/,'')); location.hash = ''; } catch(e){}
   showOnly('screen-lobby');
 }
@@ -436,6 +446,7 @@ async function createRoom() {
   currentVotes = { [pid]: { name, vote: null, joinedAt: Date.now() } };
   currentRoom = room;
   currentRoom.players = currentVotes;
+  lastSeenRound = currentRoom.round;
   subscribeRoom(id);
   renderWaiting();
 
@@ -491,6 +502,7 @@ async function joinRoom() {
   currentRoomId = urlRoom;
   currentRoom = room;
   currentRoom.players = currentVotes;
+  lastSeenRound = currentRoom.round;
   subscribeRoom(urlRoom);
 
   if (room.started) { showGame(); } else { renderWaiting(); }
@@ -718,7 +730,7 @@ async function doNewRound() {
   votingLocked = true;
   currentRoom.revealed = false;
   currentRoom.round = (currentRoom.round || 1) + 1;
-  Object.values(currentRoom.players).forEach(p => p.vote = null);
+  maybeResetOwnVoteForNewRound(currentRoom.round);
   renderGame();
   try {
     const round = currentRoom.round;
@@ -726,7 +738,6 @@ async function doNewRound() {
       r.revealed = false;
       r.round = round;
     });
-    await clearVotes(currentRoomId);
   } catch(e) { console.error('doNewRound failed:', e); }
   finally { votingLocked = false; }
 }
