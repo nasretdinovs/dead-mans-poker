@@ -421,14 +421,20 @@ async function joinRoom() {
     btn.textContent = 'Join the Table'; btn.disabled = false;
     return;
   }
-  const taken = Object.values(room.players || {}).some(p => p.name.toLowerCase() === name.toLowerCase());
-  if (taken) {
-    showError(errEl, 'That name is already at the table.');
-    btn.textContent = 'Join the Table'; btn.disabled = false;
-    return;
-  }
 
-  room.players[pid] = { name, vote: null, joinedAt: Date.now() };
+  const isRejoin = !!room.players[pid];
+  if (!isRejoin) {
+    const taken = Object.entries(room.players || {})
+      .some(([otherPid, p]) => otherPid !== pid && p.name.toLowerCase() === name.toLowerCase());
+    if (taken) {
+      showError(errEl, 'That name is already at the table.');
+      btn.textContent = 'Join the Table'; btn.disabled = false;
+      return;
+    }
+    room.players[pid] = { name, vote: null, joinedAt: Date.now() };
+  } else {
+    room.players[pid].name = name;
+  }
   await saveRoom(urlRoom, room);
 
   currentRoomId = urlRoom;

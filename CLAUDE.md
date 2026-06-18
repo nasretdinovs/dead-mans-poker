@@ -14,6 +14,7 @@ Single HTML file deployed on GitHub Pages.
 - **Anon key:** `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhseGtnY2Jja2JqcHBhdG1pcmhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE1NTQ5MjYsImV4cCI6MjA5NzEzMDkyNn0.ZOTi9xvHdTrdsmsIhR8a-V_YVw1NwoxTQkPbjpwapWQ`
 - **Table:** `rooms` with fields `id text PK`, `state jsonb`, `updated_at timestamptz`
 - **RLS:** enabled, anon policies for select/insert/update/delete
+- **Full schema/RLS/RPC/realtime setup:** `db/supabase_setup.sql` — single idempotent-ish script (drops and recreates `rooms`) that is the source of truth for the whole Supabase side. Re-run it any time the dashboard config is suspected to be wrong/drifted.
 
 ## DB state shape (jsonb field `state`)
 ```json
@@ -70,7 +71,7 @@ hours:      ['1','2','4','8','16','24','32','40']
 
 ## Key functions
 - `createRoom()` — generates 6-char ID, saves to Supabase, sets hash
-- `joinRoom()` — reads `urlRoom` from hash/query, adds pid to players
+- `joinRoom()` — reads `urlRoom` from hash/query; if `pid` already has an entry in `room.players` this is a **rejoin** (e.g. after a page reload) and skips the name-collision check, only updating `name` and preserving the existing `vote`/`joinedAt`; otherwise it's a new player and the name-collision check excludes the caller's own `pid`
 - `subscribeRoom(id)` — sets up Realtime channel
 - `renderWaiting()` — updates waiting screen innerHTML
 - `renderGame()` — updates game screen: seats, center area, hand cards
@@ -100,11 +101,13 @@ const urlRoom      // room ID parsed from URL on page load
 - Hover triggered re-render → removed `hoverCard` from state, pure CSS `:hover` now
 - Seating didn't respect player perspective → added `rotationOffset` based on `myIndex`
 - **Clicking a card appeared to do nothing** — `doVote()` had no optimistic UI update; it awaited a full network round-trip (`updateRoom`'s read-modify-write, up to 3 retries) before re-rendering. Fixed by mutating local state and calling `renderGame()` immediately on click, then writing to the server in the background with rollback + toast (`showVoteError`) on failure.
-- **Second player was voting for everyone (lost-update race)** — the old retry logic in `updateRoom` only retried on *upsert errors*, not on stale reads, so concurrent votes from two players could have the later write silently overwrite the earlier player's vote (both started from the same stale `rooms.state` blob). Fixed by routing `doVote` through a new `set_player_vote` Postgres RPC that does an atomic `UPDATE ... SET state = jsonb_set(...)` directly in Postgres — concurrent updates to the same row are serialized by Postgres, so no vote is lost. Requires the SQL function to be created once in the Supabase SQL editor (see `db/set_player_vote.sql` or the project plan history).
+- **Second player was voting for everyone (lost-update race)** — the old retry logic in `updateRoom` only retried on *upsert errors*, not on stale reads, so concurrent votes from two players could have the later write silently overwrite the earlier player's vote (both started from the same stale `rooms.state` blob). Fixed by routing `doVote` through a new `set_player_vote` Postgres RPC that does an atomic `UPDATE ... SET state = jsonb_set(...)` directly in Postgres — concurrent updates to the same row are serialized by Postgres, so no vote is lost. Requires the SQL function to be created once in the Supabase SQL editor (see `db/supabase_setup.sql`).
+- **Reload/rejoin self-blocked ("That name is already at the table")** — `initJoin()` always shows the Join screen for any visit to a room URL, including reloads of an already-joined player/host. `joinRoom()`'s name-collision check used to compare against *all* players including the caller's own existing entry (same `pid`, same `localStorage`), so any reload permanently locked that player out of their own room — looked exactly like "can't select any cards" since they were stuck on the Join screen, not the game screen. Fixed by detecting `isRejoin = !!room.players[pid]` and skipping the collision check entirely for rejoins (only the name field is refreshed; `vote`/`joinedAt` are preserved). New players still get the collision check, now explicitly excluding their own `pid` from the comparison.
 
 ## Open issues
 - The whole-room-as-one-jsonb-blob model is still used for room metadata (deck, revealed, round, started) and is a planned target for a `votes` table split in a later refactor — see project history for the planned `votes` table migration that would remove `jsonb_set` entirely.
 - `renderGame()` still fully tears down and rebuilds the seats/hand-card DOM on every render (cosmetic jank, not breakage) — deferred to the same future refactor.
+- Verify in the Supabase dashboard (Database → Replication) that Realtime is actually enabled for the `rooms` table — if not, `postgres_changes` never fires and players never see each other's votes update without a manual reload, which independently looks like "everything is out of sync."
 
 ## Design tokens
 - **Fonts:** Cinzel Decorative (title), Cinzel (UI labels), Cormorant Garamond (body), Playfair Display (card numbers)
