@@ -308,18 +308,23 @@ async function updateRoom(id, fn) {
 }
 
 // ── Realtime ────────────────────────────────────────────────────────────
+let lastAppliedUpdatedAt = null;
 function subscribeRoom(id) {
   if (realtimeSub) { sb.removeChannel(realtimeSub); realtimeSub = null; }
+  lastAppliedUpdatedAt = null;
   realtimeSub = sb.channel('room:' + id)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms', filter: 'id=eq.' + id },
-      async (payload) => {
+      (payload) => {
         if (payload.eventType === 'DELETE') {
           goLobby();
           return;
         }
-        const room = await loadRoom(id);
-        if (!room) { goLobby(); return; }
-        if (room.players && !room.players[pid]) { console.log('realtime: pid not in room, going lobby. pid=', pid, 'players=', Object.keys(room.players)); goLobby(); return; }
+        const row = payload.new;
+        if (!row || !row.state) return;
+        if (lastAppliedUpdatedAt && row.updated_at && row.updated_at <= lastAppliedUpdatedAt) return;
+        lastAppliedUpdatedAt = row.updated_at || lastAppliedUpdatedAt;
+        const room = row.state;
+        if (room.players && !room.players[pid]) { goLobby(); return; }
         currentRoom = room;
         if (room.started) {
           showGame();

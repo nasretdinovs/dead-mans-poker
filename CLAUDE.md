@@ -50,7 +50,8 @@ Screen switching via `showOnly(id)` — just `display:none/block`, no DOM recrea
 
 ## Realtime
 - Supabase `postgres_changes` on `rooms` table, filtered by `id`
-- On any change: `loadRoom()` → update `currentRoom` → `renderWaiting()` or `renderGame()`
+- On any change: read `payload.new.state` directly (no extra `loadRoom()` round-trip) → update `currentRoom` → `renderWaiting()` or `renderGame()`
+- A module-level `lastAppliedUpdatedAt` guards against out-of-order event delivery (compares `payload.new.updated_at` as ISO-8601 strings; ignores anything not newer than what's already applied)
 - Channel name: `room:ROOMID`
 
 ## Decks
@@ -108,6 +109,7 @@ const urlRoom      // room ID parsed from URL on page load
 - The whole-room-as-one-jsonb-blob model is still used for room metadata (deck, revealed, round, started) and is a planned target for a `votes` table split in a later refactor — see project history for the planned `votes` table migration that would remove `jsonb_set` entirely.
 - `renderGame()` still fully tears down and rebuilds the seats/hand-card DOM on every render (cosmetic jank, not breakage) — deferred to the same future refactor.
 - Verify in the Supabase dashboard (Database → Replication) that Realtime is actually enabled for the `rooms` table — if not, `postgres_changes` never fires and players never see each other's votes update without a manual reload, which independently looks like "everything is out of sync."
+- **~15s update delay + flip-flopping/resets after Realtime was confirmed working** — `subscribeRoom()`'s event handler used to call `await loadRoom(id)` (a fresh `SELECT`) on every single realtime event instead of using the row already delivered in `payload.new`. Two problems: (1) every vote added a full extra DB round-trip before anything rendered: (2) concurrent `loadRoom()` calls triggered by rapid back-to-back events had no ordering guarantee, so a slower-but-earlier fetch could resolve after a faster-but-later one and silently overwrite fresher state with stale state — looked exactly like cards resetting/flip-flopping with no further user action. Fixed by reading `payload.new.state` directly (synchronous, no extra query) plus a `lastAppliedUpdatedAt` monotonic guard that drops any event whose `updated_at` isn't newer than what's already applied.
 
 ## Design tokens
 - **Fonts:** Cinzel Decorative (title), Cinzel (UI labels), Cormorant Garamond (body), Playfair Display (card numbers)
