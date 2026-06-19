@@ -140,7 +140,12 @@ async function createRoom() {
   const room = { deckType, cards: DECKS[deckType], revealed: false, round: 1, started: false };
 
   await db.saveRoom(id, room);
-  await db.insertVoteRow(id, pid, name);
+  const inserted = await db.insertVoteRow(id, pid, name);
+  if (!inserted) {
+    showError(errEl, 'Could not seat you at the table — check your connection and try again.');
+    btn.textContent = 'Create Room'; btn.disabled = false;
+    return;
+  }
   try { location.hash = id; } catch (e) {}
 
   currentRoomId = id;
@@ -189,9 +194,19 @@ async function joinRoom() {
     return;
   }
   if (decision.kind === 'new-player') {
-    await db.insertVoteRow(urlRoom, pid, name);
+    const ok = await db.insertVoteRow(urlRoom, pid, name);
+    if (!ok) {
+      showError(errEl, 'Could not seat you at the table — check your connection and try again.');
+      btn.textContent = 'Join the Table'; btn.disabled = false;
+      return;
+    }
   } else if (decision.kind === 'rejoin-renamed') {
-    await db.renameVoteRow(urlRoom, pid, name);
+    const ok = await db.renameVoteRow(urlRoom, pid, name);
+    if (!ok) {
+      showError(errEl, 'Could not update your name — check your connection and try again.');
+      btn.textContent = 'Join the Table'; btn.disabled = false;
+      return;
+    }
   }
   // decision.kind === 'rejoin-same-name': nothing to write, name already matches
 
@@ -255,7 +270,11 @@ async function doVote(card) {
 }
 
 async function doReveal() {
-  if (votingLocked) return;
+  if (votingLocked) {
+    console.warn('[action] doReveal ignored — previous action still saving');
+    showVoteError('Still saving the last action — try again in a moment.');
+    return;
+  }
   votingLocked = true;
   currentRoom.revealed = true;
   renderGameScreen();
@@ -266,7 +285,11 @@ async function doReveal() {
 }
 
 async function doNewRound() {
-  if (votingLocked) return;
+  if (votingLocked) {
+    console.warn('[action] doNewRound ignored — previous action still saving');
+    showVoteError('Still saving the last action — try again in a moment.');
+    return;
+  }
   votingLocked = true;
   currentRoom.revealed = false;
   currentRoom.round = (currentRoom.round || 1) + 1;

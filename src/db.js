@@ -24,12 +24,14 @@ export async function loadVotes(roomId) {
 
 export async function insertVoteRow(roomId, playerId, name) {
   const { error } = await sb.from('votes').insert({ room_id: roomId, player_id: playerId, name, vote: null });
-  if (error) console.error('insertVoteRow error', error);
+  if (error) { console.error('insertVoteRow error', error); return false; }
+  return true;
 }
 
 export async function renameVoteRow(roomId, playerId, name) {
   const { error } = await sb.from('votes').update({ name }).eq('room_id', roomId).eq('player_id', playerId);
-  if (error) console.error('renameVoteRow error', error);
+  if (error) { console.error('renameVoteRow error', error); return false; }
+  return true;
 }
 
 export async function deleteVoteRow(roomId, playerId) {
