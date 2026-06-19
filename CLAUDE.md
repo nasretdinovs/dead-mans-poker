@@ -2,12 +2,34 @@
 
 ## What it is
 Planning poker app in Red Dead Redemption / Wild West style.
-Single HTML file deployed on GitHub Pages.
+Built with Vite, deployed as static files on GitHub Pages.
 
 ## Stack
-- **Frontend:** Vanilla JS, CSS, HTML — single file `index.html`
+- **Frontend:** Vanilla JS (ES modules) + CSS/HTML, bundled with Vite. `index.html` is the Vite entry (CSS/markup live there, JS lives in `src/`).
 - **Backend:** Supabase (Postgres + Realtime)
-- **Hosting:** GitHub Pages
+- **Hosting:** GitHub Pages (deployed from a GitHub Actions workflow, not a committed branch)
+
+## Project layout
+```
+index.html            # Vite entry — CSS + markup unchanged, single <script type="module" src="/src/main.js">
+src/
+  main.js             # bootstrap — only file with top-level side effects, calls app.init()
+  app.js              # owns all mutable app state (currentRoom, currentVotes, pid, ...) and orchestrates everything else
+  db.js               # all Supabase table/RPC access (rooms + votes) — no other module imports `sb` directly
+  realtime.js         # subscribeRoom(id, handlers) — channel setup only, no app state
+  render.js           # renderWaiting(), renderGame() — DOM-producing
+  ui.js               # showOnly, copyLink, showError, showVoteError — stateless DOM/UX helpers
+  state.js            # pure logic: votesToPlayers, computeResult, toNumericVote, decideRoundReset, resolveJoin, getRoomFromUrl, makeRoomId, escHtml
+  seats.js            # pure seat-position math (computeSeatPositions)
+  decks.js            # DECKS constant
+  supabaseClient.js   # createClient(...) singleton, reads import.meta.env
+tests/
+  state.test.js       # Vitest — covers state.js, including regression tests for past bugs (rejoin self-block, computeResult's sub-count quirk)
+  seats.test.js       # Vitest — covers seats.js
+db/supabase_setup.sql # Supabase schema/RLS/RPC/realtime — unchanged by the Vite migration
+.github/workflows/deploy.yml  # npm test -> npm run build -> deploy to GitHub Pages via Actions artifact
+```
+`npm run dev` (local dev server), `npm run build && npm run preview` (prod build smoke test), `npm test` (Vitest). `.env` (gitignored) holds `VITE_SUPABASE_URL`/`VITE_SUPABASE_KEY` for local dev; CI supplies the same two as repository **variables** (not secrets — the anon key is RLS-gated and already shipped client-side).
 
 ## Supabase
 - **URL:** `https://xlxkgcbckbjppatmirhc.supabase.co`
@@ -70,6 +92,7 @@ hours:      ['1','2','4','8','16','24','32','40']
 - Last player to leave deletes the room from DB
 
 ## Key functions
+Most of these live in `src/app.js` (orchestration) calling into `src/db.js` (Supabase access) and `src/state.js` (pure decision logic — `decideRoundReset`, `resolveJoin`). Behavior is unchanged from before the Vite migration, just split across files:
 - `createRoom()` — generates 6-char ID, saves room metadata to `rooms`, inserts the host's row into `votes` via `insertVoteRow()`
 - `joinRoom()` — reads `urlRoom` from hash/query, loads `votes` rows via `loadVotes()`; if a row for `pid` already exists this is a **rejoin** (e.g. after a page reload) — skips the name-collision check, only renaming via `renameVoteRow()`, preserving the existing `vote`/`joinedAt`; otherwise it's a new player, the name-collision check excludes the caller's own `pid`, and a new row is inserted
 - `subscribeRoom(id)` — sets up the Realtime channel covering both `rooms` and `votes`
@@ -108,12 +131,14 @@ const urlRoom      // room ID parsed from URL on page load
 - **Backend hardened: jsonb blob → dedicated `votes` table** — `rooms.state.players` (a single jsonb map mutated via read-modify-write or `jsonb_set`) was replaced with a `votes` table, one row per player per round-trip-free atomic `UPDATE`. `set_player_vote` (jsonb RPC) was replaced by `set_vote` (plain-column RPC). Realtime now subscribes to both tables on one channel; `votes` events are applied incrementally into the client-side `currentVotes` map rather than re-fetched, avoiding the same kind of ordering race fixed above. `rooms.state` is now metadata-only (`deckType`, `cards`, `revealed`, `round`, `started`), so every `updateRoom()` upsert is smaller and never touches contended per-player data.
 - **Everything broke again after "New Round"** — the first cut of the `votes` migration added a `clear_votes` RPC that blanket-updated *every* player's row to `vote = null` in one statement. That broke the "single writer per row" invariant the rest of the design relies on: if another player voted for the new round while that blanket write was still in flight (different session, unrelated network latency), the blanket write could commit *after* their fresh vote and silently wipe it — same failure shape as the original lost-vote race, just relocated. Fixed by removing `clear_votes` entirely; instead, every connected client runs `maybeResetOwnVoteForNewRound()` and resets only its **own** vote row when it notices `currentRoom.round` changed (detected in the `rooms`-table realtime handler for everyone, and inline for whoever clicked "New Round"). No row is ever written by anyone other than its owner. Trade-off: a player whose tab isn't open during the round change won't get their stale vote cleared until they reopen the app and the round-change detection fires for them — acceptable since it's a purely cosmetic "ghost vote" on one seat, not a correctness/lost-data issue.
 - **Reload/rejoin self-blocked ("That name is already at the table")** — `initJoin()` always shows the Join screen for any visit to a room URL, including reloads of an already-joined player/host. `joinRoom()`'s name-collision check used to compare against *all* players including the caller's own existing entry (same `pid`, same `localStorage`), so any reload permanently locked that player out of their own room — looked exactly like "can't select any cards" since they were stuck on the Join screen, not the game screen. Fixed by detecting `isRejoin = !!room.players[pid]` and skipping the collision check entirely for rejoins (only the name field is refreshed; `vote`/`joinedAt` are preserved). New players still get the collision check, now explicitly excluding their own `pid` from the comparison.
+- **Untested single file → Vite + ES modules + Vitest** — all the gameplay/backend logic above was correct but lived in one 800-line `<script>` block with zero automated tests, so every new fix risked silently reintroducing a previously-fixed race. Decomposed into `src/` modules (see Project layout above) with no behavior changes — same `index.html` markup/CSS, same Supabase schema, same game logic. The trickiest decision logic (`resolveJoin` for the rejoin/name-collision bug above, `decideRoundReset` for the New Round bug above, `computeResult`'s average-vs-mode math) is now covered by Vitest regression tests in `tests/`, including explicit tests pinned to the exact bugs in this list so they can't silently come back. Deploys now go through `.github/workflows/deploy.yml` (build + test + deploy) instead of serving `index.html` directly from the repo root.
 
 ## Open issues
-- `renderGame()` still fully tears down and rebuilds the seats/hand-card DOM on every render (cosmetic jank, not breakage) — deferred to a future Vite/module-split refactor (not started).
+- `renderGame()` still fully tears down and rebuilds the seats/hand-card DOM on every render (cosmetic jank, not breakage) — now that the code is module-split, a future diffing/patching pass is more feasible, but not started.
 - Verify in the Supabase dashboard (Database → Replication) that Realtime is enabled for **both** `rooms` and `votes` — `db/supabase_setup.sql` does this via `alter publication supabase_realtime add table ...`, but worth re-checking after any manual dashboard changes.
 - Known cosmetic limitation: a player whose tab is closed/disconnected when "New Round" happens keeps their stale vote from the previous round displayed on their seat until they reopen the app (their own client is what clears it — see `maybeResetOwnVoteForNewRound`). Not a correctness issue, just a stale "ghost" card on one seat.
 - If delay/instability returns: check the browser DevTools Network → WS tab for reconnect loops, and rule out a Supabase free-tier cold start, before assuming it's a code regression — the known code-level causes (whole-blob race, extra-query realtime race) are fixed as of the `votes` table migration above.
+- **One-time manual setup required for the Vite/CI migration to actually deploy:** in the GitHub repo, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_KEY` under Settings → Secrets and variables → Actions → **Variables**, and switch Settings → Pages → Source to **"GitHub Actions"**. Until both are done, `.github/workflows/deploy.yml` will fail (missing env vars) or Pages will keep serving from whatever the old source was.
 
 ## Design tokens
 - **Fonts:** Cinzel Decorative (title), Cinzel (UI labels), Cormorant Garamond (body), Playfair Display (card numbers)
