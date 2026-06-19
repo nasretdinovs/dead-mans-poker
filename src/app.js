@@ -66,8 +66,12 @@ function subscribeToRoom(id) {
       console.log('[realtime]', new Date().toISOString(), 'room:' + id, status, err || '');
       renderConnStatus(status);
     },
-    onRoomDeleted: goLobby,
+    onRoomDeleted: () => {
+      console.log('[realtime:event]', new Date().toISOString(), 'rooms DELETE');
+      goLobby();
+    },
     onRoomChange: (roomState, updatedAt) => {
+      console.log('[realtime:event]', new Date().toISOString(), 'rooms', roomState, 'updatedAt:', updatedAt);
       if (lastAppliedUpdatedAt && updatedAt && updatedAt <= lastAppliedUpdatedAt) return;
       lastAppliedUpdatedAt = updatedAt || lastAppliedUpdatedAt;
       if (!currentRoom) return;
@@ -77,6 +81,7 @@ function subscribeToRoom(id) {
       renderAfterChange();
     },
     onVoteUpsert: (row) => {
+      console.log('[realtime:event]', new Date().toISOString(), 'votes upsert', row);
       currentVotes[row.player_id] = { name: row.name, vote: row.vote, joinedAt: new Date(row.joined_at).getTime() };
       if (!currentRoom) return;
       currentRoom.players = currentVotes;
@@ -84,6 +89,7 @@ function subscribeToRoom(id) {
       renderAfterChange();
     },
     onVoteDelete: (playerId) => {
+      console.log('[realtime:event]', new Date().toISOString(), 'votes delete', playerId);
       delete currentVotes[playerId];
       if (!currentRoom) return;
       currentRoom.players = currentVotes;
