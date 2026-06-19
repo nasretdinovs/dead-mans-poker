@@ -30,6 +30,24 @@ export function showVoteError(msg) {
   el._t = setTimeout(() => { el.style.display = 'none'; }, 3000);
 }
 
+const CONN_STATUS_TEXT = {
+  SUBSCRIBED: '● live',
+  TIMED_OUT: '● lost connection — retrying',
+  CLOSED: '● lost connection — retrying',
+  CHANNEL_ERROR: '● lost connection — retrying',
+};
+
+// Reflects the realtime channel's connection status in both small debug-style spans
+// (game bar + waiting screen) so a stuck/erroring channel is visible instead of silently
+// looking like "nothing is happening".
+export function renderConnStatus(status) {
+  const text = CONN_STATUS_TEXT[status] || '● connecting…';
+  ['game-conn-status', 'waiting-conn-status'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  });
+}
+
 let copiedTimer = null;
 export async function copyLink(btnId, link) {
   try { await navigator.clipboard.writeText(link); } catch (e) {}

@@ -5,7 +5,7 @@ import { DECKS } from './decks.js';
 import * as db from './db.js';
 import { subscribeRoom, unsubscribeRoom } from './realtime.js';
 import { renderWaiting, renderGame } from './render.js';
-import { showOnly, showError, showVoteError, copyLink } from './ui.js';
+import { showOnly, showError, showVoteError, copyLink, renderConnStatus } from './ui.js';
 import { votesToPlayers, resolveJoin, decideRoundReset, getRoomFromUrl, makeRoomId } from './state.js';
 
 let pid = null;
@@ -62,6 +62,10 @@ function subscribeToRoom(id) {
   if (realtimeChannel) { unsubscribeRoom(realtimeChannel); realtimeChannel = null; }
   lastAppliedUpdatedAt = null;
   realtimeChannel = subscribeRoom(id, {
+    onStatusChange: (status, err) => {
+      console.log('[realtime]', new Date().toISOString(), 'room:' + id, status, err || '');
+      renderConnStatus(status);
+    },
     onRoomDeleted: goLobby,
     onRoomChange: (roomState, updatedAt) => {
       if (lastAppliedUpdatedAt && updatedAt && updatedAt <= lastAppliedUpdatedAt) return;

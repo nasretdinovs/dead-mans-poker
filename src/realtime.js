@@ -7,6 +7,9 @@ import { sb } from './supabaseClient.js';
 //   onRoomDeleted()                    — called on rooms DELETE
 //   onVoteUpsert(row)                  — called on votes INSERT/UPDATE with the raw row (player_id, name, vote, joined_at)
 //   onVoteDelete(playerId)             — called on votes DELETE with the deleted row's player_id
+//   onStatusChange(status, err)        — called whenever the channel's connection status changes
+//                                         (status is one of supabase-js's REALTIME_SUBSCRIBE_STATES:
+//                                         'SUBSCRIBED' | 'TIMED_OUT' | 'CLOSED' | 'CHANNEL_ERROR')
 export function subscribeRoom(id, handlers) {
   return sb
     .channel('room:' + id)
@@ -29,7 +32,7 @@ export function subscribeRoom(id, handlers) {
       if (!row) return;
       handlers.onVoteUpsert(row);
     })
-    .subscribe();
+    .subscribe((status, err) => handlers.onStatusChange(status, err));
 }
 
 export function unsubscribeRoom(channel) {
