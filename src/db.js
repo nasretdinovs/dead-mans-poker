@@ -45,17 +45,23 @@ export async function setVote(id, playerId, vote) {
   return true;
 }
 
-// load -> mutate -> upsert `rooms.state`, retries up to 3x. Used for single-actor room-level
-// mutations (reveal/new round/start) where there's no concurrent-writer race to worry about.
-export async function updateRoom(id, fn) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const room = await loadRoom(id);
-    if (!room) return null;
-    fn(room);
-    const { error } = await sb.from('rooms').upsert({ id, state: room, updated_at: new Date().toISOString() });
-    if (!error) return room;
-    console.warn('updateRoom attempt', attempt + 1, 'failed:', error.message);
-    await new Promise(r => setTimeout(r, 100 * (attempt + 1)));
-  }
-  return null;
+// Atomic shared-state transitions — each is a single compare-and-swap UPDATE in Postgres (see
+// db/supabase_setup.sql), so two clients calling the same one at nearly the same instant always
+// converge on one authoritative `state` instead of racing a client-side read-modify-write.
+export async function revealRound(id) {
+  const { data, error } = await sb.rpc('reveal_round', { p_room_id: id });
+  if (error) { console.error('revealRound error', error); return null; }
+  return data;
+}
+
+export async function newRound(id, expectedRound) {
+  const { data, error } = await sb.rpc('new_round', { p_room_id: id, p_expected_round: expectedRound });
+  if (error) { console.error('newRound error', error); return null; }
+  return data;
+}
+
+export async function startGame(id) {
+  const { data, error } = await sb.rpc('start_game', { p_room_id: id });
+  if (error) { console.error('startGame error', error); return null; }
+  return data;
 }

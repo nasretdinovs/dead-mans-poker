@@ -39,7 +39,7 @@ function showGameScreen() {
 }
 
 function renderGameScreen() {
-  renderGame({ room: currentRoom, currentRoomId, pid }, {
+  renderGame({ room: currentRoom, currentRoomId, pid, locked: votingLocked }, {
     onVote: doVote,
     onReveal: doReveal,
     onNewRound: doNewRound,
@@ -230,11 +230,13 @@ function initWaitingButtons() {
   document.getElementById('waiting-start-btn').addEventListener('click', async () => {
     const btn = document.getElementById('waiting-start-btn');
     btn.disabled = true; btn.textContent = 'Starting…';
-    const room = await db.updateRoom(currentRoomId, r => { r.started = true; });
-    if (room) {
-      currentRoom = room;
+    const state = await db.startGame(currentRoomId);
+    if (state) {
+      Object.assign(currentRoom, state);
       currentRoom.players = currentVotes;
       showGameScreen();
+    } else {
+      showVoteError('Could not start the game — try again in a moment.');
     }
     btn.disabled = false; btn.textContent = 'Start the Game';
   });
@@ -269,6 +271,12 @@ async function doVote(card) {
   }
 }
 
+// Reveal/New Round affect the WHOLE table's shared state, not just the clicker's own view — so
+// unlike doVote(), there is no optimistic local mutation here. The button shows a local "saving"
+// state, but currentRoom.revealed/round only ever change once the atomic RPC (see db.js/
+// supabase_setup.sql) confirms what the server actually applied, same as a realtime event from
+// another player's click would. That keeps every connected client converged on one truth instead
+// of briefly diverging on a local guess while a slow/flaky network catches up.
 async function doReveal() {
   if (votingLocked) {
     console.warn('[action] doReveal ignored — previous action still saving');
@@ -276,12 +284,17 @@ async function doReveal() {
     return;
   }
   votingLocked = true;
-  currentRoom.revealed = true;
   renderGameScreen();
   try {
-    await db.updateRoom(currentRoomId, r => { r.revealed = true; });
-  } catch (e) { console.error('doReveal failed:', e); }
-  finally { votingLocked = false; }
+    const state = await db.revealRound(currentRoomId);
+    if (state) {
+      Object.assign(currentRoom, state);
+      currentRoom.players = currentVotes;
+    } else {
+      showVoteError('Could not reveal the cards — try again, partner.');
+    }
+  } catch (e) { console.error('doReveal failed:', e); showVoteError('Could not reveal the cards — try again, partner.'); }
+  finally { votingLocked = false; renderGameScreen(); }
 }
 
 async function doNewRound() {
@@ -291,18 +304,19 @@ async function doNewRound() {
     return;
   }
   votingLocked = true;
-  currentRoom.revealed = false;
-  currentRoom.round = (currentRoom.round || 1) + 1;
-  maybeResetOwnVoteForNewRound(currentRoom.round);
   renderGameScreen();
   try {
-    const round = currentRoom.round;
-    await db.updateRoom(currentRoomId, r => {
-      r.revealed = false;
-      r.round = round;
-    });
-  } catch (e) { console.error('doNewRound failed:', e); }
-  finally { votingLocked = false; }
+    const expectedRound = currentRoom.round || 1;
+    const state = await db.newRound(currentRoomId, expectedRound);
+    if (state) {
+      Object.assign(currentRoom, state);
+      currentRoom.players = currentVotes;
+      maybeResetOwnVoteForNewRound(currentRoom.round);
+    } else {
+      showVoteError('Could not start a new round — try again, partner.');
+    }
+  } catch (e) { console.error('doNewRound failed:', e); showVoteError('Could not start a new round — try again, partner.'); }
+  finally { votingLocked = false; renderGameScreen(); }
 }
 
 async function leaveRoom() {

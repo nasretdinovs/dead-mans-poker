@@ -30,7 +30,7 @@ export function renderWaiting({ room, currentRoomId, pid, inviteLink }) {
   document.getElementById('waiting-invite-input').value = inviteLink;
 }
 
-export function renderGame({ room, currentRoomId, pid }, { onVote, onReveal, onNewRound }) {
+export function renderGame({ room, currentRoomId, pid, locked }, { onVote, onReveal, onNewRound }) {
   if (!room) return;
 
   const players = Object.entries(room.players).sort((a, b) => a[1].joinedAt - b[1].joinedAt);
@@ -110,12 +110,12 @@ export function renderGame({ room, currentRoomId, pid }, { onVote, onReveal, onN
       ${res.allSame ? '<div class="verdict-unanimous">✦ Unanimous ✦</div>' : ''}
       <div class="verdict-sub">${escHtml(res.sub)}</div>
       ${rangeHtml}
-      <button class="btn btn-gold" style="margin-top:14px" id="game-newround-btn">New Round</button>
+      <button class="btn btn-gold" style="margin-top:14px" id="game-newround-btn"${locked ? ' disabled' : ''}>${locked ? 'Saving…' : 'New Round'}</button>
     </div>`;
-    document.getElementById('game-newround-btn').addEventListener('click', onNewRound);
+    if (!locked) document.getElementById('game-newround-btn').addEventListener('click', onNewRound);
   } else if (allVoted) {
-    center.innerHTML = `<button class="reveal-btn" id="game-reveal-btn">Reveal Cards</button>`;
-    document.getElementById('game-reveal-btn').addEventListener('click', onReveal);
+    center.innerHTML = `<button class="reveal-btn" id="game-reveal-btn"${locked ? ' disabled' : ''}>${locked ? 'Revealing…' : 'Reveal Cards'}</button>`;
+    if (!locked) document.getElementById('game-reveal-btn').addEventListener('click', onReveal);
   } else {
     center.innerHTML = `<div class="waiting-box">
       <div class="waiting-title">Awaiting Bets</div>

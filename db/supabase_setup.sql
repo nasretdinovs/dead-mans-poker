@@ -19,6 +19,9 @@
 drop function if exists set_player_vote(text, text, text);
 drop function if exists set_vote(text, text, text);
 drop function if exists clear_votes(text);
+drop function if exists reveal_round(text);
+drop function if exists new_round(text, int);
+drop function if exists start_game(text);
 drop table if exists votes cascade;
 drop table if exists rooms cascade;
 
@@ -76,6 +79,82 @@ $func$;
 
 grant execute on function set_vote(text, text, text) to anon;
 
+-- 4b. Atomic shared-state transitions (reveal / new round / start) -----------
+-- `rooms.state` (revealed/round/started) is shared across every player at the
+-- table, unlike a per-player vote row. Each function does a single atomic
+-- UPDATE with a compare-and-swap WHERE clause (expects the field's current
+-- value before flipping it), instead of the client doing load -> mutate JS
+-- object -> upsert whole state (a read-modify-write race). If two clients
+-- call the same function at nearly the same instant, exactly one UPDATE
+-- matches the WHERE clause and takes effect; the other becomes a no-op that
+-- falls through to re-reading the row. Either way both callers receive the
+-- same authoritative `state` back — there is no path where two clients can
+-- walk away with two different "current" states.
+create or replace function reveal_round(p_room_id text)
+returns jsonb
+language plpgsql
+security invoker
+as $func$
+declare
+  v_state jsonb;
+begin
+  update rooms set state = jsonb_set(state, '{revealed}', 'true'),
+                   updated_at = now()
+  where id = p_room_id and (state->>'revealed') = 'false'
+  returning state into v_state;
+
+  if v_state is null then
+    select state into v_state from rooms where id = p_room_id;
+  end if;
+  return v_state;
+end;
+$func$;
+
+create or replace function new_round(p_room_id text, p_expected_round int)
+returns jsonb
+language plpgsql
+security invoker
+as $func$
+declare
+  v_state jsonb;
+begin
+  update rooms set state = jsonb_set(jsonb_set(state, '{revealed}', 'false'),
+                                      '{round}', to_jsonb(p_expected_round + 1)),
+                   updated_at = now()
+  where id = p_room_id and (state->>'round')::int = p_expected_round
+  returning state into v_state;
+
+  if v_state is null then
+    select state into v_state from rooms where id = p_room_id;
+  end if;
+  return v_state;
+end;
+$func$;
+
+create or replace function start_game(p_room_id text)
+returns jsonb
+language plpgsql
+security invoker
+as $func$
+declare
+  v_state jsonb;
+begin
+  update rooms set state = jsonb_set(state, '{started}', 'true'),
+                   updated_at = now()
+  where id = p_room_id and (state->>'started') = 'false'
+  returning state into v_state;
+
+  if v_state is null then
+    select state into v_state from rooms where id = p_room_id;
+  end if;
+  return v_state;
+end;
+$func$;
+
+grant execute on function reveal_round(text) to anon;
+grant execute on function new_round(text, int) to anon;
+grant execute on function start_game(text) to anon;
+
 -- Note: there is deliberately no "clear all votes" RPC. "New Round" is
 -- implemented as every connected client independently resetting only its
 -- OWN vote row when it notices the room's `round` changed (see
@@ -106,4 +185,14 @@ alter publication supabase_realtime add table votes;
 -- select set_vote('TEST01', 'p_missing', '5');    -- should return false
 -- select set_vote('TEST01', 'p1', null);           -- own-row reset, should return true
 -- select * from votes where room_id = 'TEST01';   -- vote should be null again
+
+-- Smoke test the atomic shared-state transitions (CAS behavior):
+-- insert into rooms (id, state) values ('TEST02', '{"deckType":"fibonacci","cards":["1","2","3"],"revealed":false,"round":1,"started":false}');
+-- select reveal_round('TEST02');                   -- revealed -> true
+-- select reveal_round('TEST02');                   -- already true: no-op, still returns revealed:true (not an error)
+-- select new_round('TEST02', 1);                   -- round 1 -> 2, revealed -> false
+-- select new_round('TEST02', 1);                   -- stale expected round: no-op, returns round:2 unchanged
+-- select start_game('TEST02');                     -- started -> true
+-- delete from rooms where id = 'TEST02';           -- cascades and deletes any votes rows too
+
 -- delete from rooms where id = 'TEST01';           -- cascades and deletes the votes row too
