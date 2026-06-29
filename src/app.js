@@ -55,11 +55,22 @@ function renderGameScreen() {
 async function resyncRoom() {
   const id = currentRoomId;
   if (!id) return;
-  const room = await db.loadRoom(id);
-  if (currentRoomId !== id) return; // left/switched rooms while this was in flight
+  let room, votesRows;
+  try {
+    room = await db.loadRoom(id);
+    if (currentRoomId !== id) return; // left/switched rooms while this was in flight
+    if (room) votesRows = await db.loadVotes(id);
+    if (currentRoomId !== id) return;
+  } catch (e) {
+    // A failed fetch is NOT the same as "this room/player no longer exists" — loadRoom/loadVotes
+    // throw on a real network error specifically so this can tell the two apart. Treating a
+    // transient failure as "you've been removed" would boot a perfectly seated player to the
+    // lobby just because one resync request hit the same connection instability documented
+    // elsewhere in this file; just skip this attempt, the next SUBSCRIBED will retry.
+    console.warn('[resync] failed, will retry on next reconnect:', e);
+    return;
+  }
   if (!room) { goLobby(); return; }
-  const votesRows = await db.loadVotes(id);
-  if (currentRoomId !== id) return;
   currentVotes = votesToPlayers(votesRows);
   if (!currentVotes[pid]) { goLobby(); return; }
   currentRoom = room;
@@ -196,14 +207,22 @@ async function joinRoom() {
   btn.textContent = 'Entering saloon…'; btn.disabled = true;
   errEl.style.display = 'none';
 
-  const room = await db.loadRoom(urlRoom);
-  if (!room) {
-    showError(errEl, 'No such table in this town, partner.');
+  let room, votesRows;
+  try {
+    room = await db.loadRoom(urlRoom);
+    if (!room) {
+      showError(errEl, 'No such table in this town, partner.');
+      btn.textContent = 'Join the Table'; btn.disabled = false;
+      return;
+    }
+    votesRows = await db.loadVotes(urlRoom);
+  } catch (e) {
+    console.error('joinRoom load failed:', e);
+    showError(errEl, 'Could not reach the saloon — check your connection and try again.');
     btn.textContent = 'Join the Table'; btn.disabled = false;
     return;
   }
 
-  const votesRows = await db.loadVotes(urlRoom);
   const decision = resolveJoin(votesRows, pid, name, Date.now(), room.round);
 
   if (decision.kind === 'name-taken') {
@@ -342,8 +361,14 @@ async function leaveRoom() {
   const id = currentRoomId;
   if (id) {
     await db.deleteVoteRow(id, pid);
-    const remaining = await db.loadVotes(id);
-    if (remaining.length === 0) await db.deleteRoom(id);
+    try {
+      const remaining = await db.loadVotes(id);
+      if (remaining.length === 0) await db.deleteRoom(id);
+    } catch (e) {
+      // Best-effort cleanup — if checking/deleting an empty room fails, the player should still
+      // be able to leave; an orphaned empty room just sits unused, not a correctness problem.
+      console.warn('leaveRoom: could not check/clean up the room, leaving anyway:', e);
+    }
   }
   goLobby();
 }

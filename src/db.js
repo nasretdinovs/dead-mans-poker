@@ -1,10 +1,19 @@
 // All Supabase table/RPC access lives here — no other module imports `sb` directly.
 import { sb } from './supabaseClient.js';
 
+// Throws on a real fetch/query failure (network error, timeout, ...) instead of swallowing it
+// into the same `null` used for "no such room" — callers that treat "room missing" as a signal
+// to evict the player (e.g. resyncRoom in app.js) need to tell those two cases apart, or a
+// transient network blip masquerades as "this room was deleted" and kicks out a player who's
+// still very much seated. `PGRST116` is PostgREST's "no rows" code for `.single()`, which is the
+// one error case that legitimately means "not found", not "the request failed".
 export async function loadRoom(id) {
   const { data, error } = await sb.from('rooms').select('state').eq('id', id).single();
-  if (error || !data) return null;
-  return data.state;
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    throw error;
+  }
+  return data ? data.state : null;
 }
 
 export async function saveRoom(id, room) {
@@ -16,10 +25,12 @@ export async function deleteRoom(id) {
   await sb.from('rooms').delete().eq('id', id);
 }
 
+// Same error/empty distinction as loadRoom above: a query failure throws, an empty (but
+// successful) result returns `[]` — a real "no votes" state, not "the request failed".
 export async function loadVotes(roomId) {
   const { data, error } = await sb.from('votes').select('player_id, name, vote, round, joined_at').eq('room_id', roomId);
-  if (error || !data) return [];
-  return data;
+  if (error) throw error;
+  return data || [];
 }
 
 export async function insertVoteRow(roomId, playerId, name, round) {
