@@ -6,9 +6,17 @@ const ROOM_ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export function votesToPlayers(rows) {
   const players = {};
   rows.forEach(r => {
-    players[r.player_id] = { name: r.name, vote: r.vote, joinedAt: new Date(r.joined_at).getTime() };
+    players[r.player_id] = { name: r.name, vote: r.vote, round: r.round, joinedAt: new Date(r.joined_at).getTime() };
   });
   return players;
+}
+
+// A vote only counts as "cast for the current round" when its stamped `round` (set atomically by
+// the `set_vote` RPC alongside the vote itself, see db/supabase_setup.sql) matches the room's
+// current round. This is a pure, identical computation on every client off data already
+// replicated via realtime — no extra write or per-client cleanup needed when a new round starts.
+export function isCurrentVote(player, roomRound) {
+  return !!player && player.vote != null && player.round === roomRound;
 }
 
 export function toNumericVote(v) {
@@ -48,27 +56,20 @@ export function computeResult(votes, deckType) {
   return { value: best, sub: 'most common of ' + nonNullVotes.length + ' bets', allSame };
 }
 
-// Pure decision half of "reset my vote when the round changes". The caller is responsible for
-// the side effects (mutating currentVotes[pid] and calling the setVote RPC) — see app.js.
-export function decideRoundReset(lastSeenRound, newRound) {
-  const shouldReset = lastSeenRound !== null && newRound !== lastSeenRound;
-  return { shouldReset, nextLastSeenRound: newRound };
-}
-
-// votesRows: Array<{ player_id, name, vote, joined_at }>
-export function resolveJoin(votesRows, pid, name, now = Date.now()) {
+// votesRows: Array<{ player_id, name, vote, round, joined_at }>
+export function resolveJoin(votesRows, pid, name, now = Date.now(), currentRound = 1) {
   const existing = votesRows.find(r => r.player_id === pid);
 
   if (!existing) {
     const taken = votesRows.some(r => r.player_id !== pid && r.name.toLowerCase() === name.toLowerCase());
     if (taken) return { kind: 'name-taken' };
-    return { kind: 'new-player', vote: null, joinedAt: now };
+    return { kind: 'new-player', vote: null, round: currentRound, joinedAt: now };
   }
 
   const joinedAt = new Date(existing.joined_at).getTime();
   return existing.name === name
-    ? { kind: 'rejoin-same-name', vote: existing.vote, joinedAt }
-    : { kind: 'rejoin-renamed', vote: existing.vote, joinedAt };
+    ? { kind: 'rejoin-same-name', vote: existing.vote, round: existing.round, joinedAt }
+    : { kind: 'rejoin-renamed', vote: existing.vote, round: existing.round, joinedAt };
 }
 
 export function getRoomFromUrl(search, hash) {

@@ -6,17 +6,16 @@ import * as db from './db.js';
 import { subscribeRoom, unsubscribeRoom } from './realtime.js';
 import { renderWaiting, renderGame } from './render.js';
 import { showOnly, showError, showVoteError, copyLink, renderConnStatus } from './ui.js';
-import { votesToPlayers, resolveJoin, decideRoundReset, getRoomFromUrl, makeRoomId } from './state.js';
+import { votesToPlayers, resolveJoin, getRoomFromUrl, makeRoomId } from './state.js';
 
 let pid = null;
 let urlRoom = null;
 
 let currentRoom = null;
 let currentRoomId = null;
-let currentVotes = {}; // player_id -> { name, vote, joinedAt } — mirrored onto currentRoom.players
+let currentVotes = {}; // player_id -> { name, vote, round, joinedAt } — mirrored onto currentRoom.players
 let realtimeChannel = null;
 let votingLocked = false;
-let lastSeenRound = null;
 let lastAppliedUpdatedAt = null;
 
 function inviteLink() {
@@ -46,18 +45,6 @@ function renderGameScreen() {
   });
 }
 
-// Each player resets only THEIR OWN vote row when they notice the round changed — never another
-// player's row. A shared "clear all votes" write would race with anyone voting for the new round
-// while that write is still in flight, silently wiping their fresh vote.
-function maybeResetOwnVoteForNewRound(newRound) {
-  const { shouldReset, nextLastSeenRound } = decideRoundReset(lastSeenRound, newRound);
-  if (shouldReset && currentVotes[pid]) {
-    currentVotes[pid].vote = null;
-    db.setVote(currentRoomId, pid, null);
-  }
-  lastSeenRound = nextLastSeenRound;
-}
-
 function subscribeToRoom(id) {
   if (realtimeChannel) { unsubscribeRoom(realtimeChannel); realtimeChannel = null; }
   lastAppliedUpdatedAt = null;
@@ -77,12 +64,11 @@ function subscribeToRoom(id) {
       if (!currentRoom) return;
       Object.assign(currentRoom, roomState);
       currentRoom.players = currentVotes;
-      maybeResetOwnVoteForNewRound(currentRoom.round);
       renderAfterChange();
     },
     onVoteUpsert: (row) => {
       console.log('[realtime:event]', new Date().toISOString(), 'votes upsert', row);
-      currentVotes[row.player_id] = { name: row.name, vote: row.vote, joinedAt: new Date(row.joined_at).getTime() };
+      currentVotes[row.player_id] = { name: row.name, vote: row.vote, round: row.round, joinedAt: new Date(row.joined_at).getTime() };
       if (!currentRoom) return;
       currentRoom.players = currentVotes;
       if (!currentVotes[pid]) { goLobby(); return; }
@@ -101,7 +87,7 @@ function subscribeToRoom(id) {
 
 function goLobby() {
   if (realtimeChannel) { unsubscribeRoom(realtimeChannel); realtimeChannel = null; }
-  currentRoom = null; currentRoomId = null; currentVotes = {}; lastSeenRound = null;
+  currentRoom = null; currentRoomId = null; currentVotes = {};
   try {
     history.replaceState({}, '', location.pathname + location.search.replace(/[?&]room=[^&]*/, ''));
     location.hash = '';
@@ -140,7 +126,7 @@ async function createRoom() {
   const room = { deckType, cards: DECKS[deckType], revealed: false, round: 1, started: false };
 
   await db.saveRoom(id, room);
-  const inserted = await db.insertVoteRow(id, pid, name);
+  const inserted = await db.insertVoteRow(id, pid, name, room.round);
   if (!inserted) {
     showError(errEl, 'Could not seat you at the table — check your connection and try again.');
     btn.textContent = 'Create Room'; btn.disabled = false;
@@ -149,10 +135,9 @@ async function createRoom() {
   try { location.hash = id; } catch (e) {}
 
   currentRoomId = id;
-  currentVotes = { [pid]: { name, vote: null, joinedAt: Date.now() } };
+  currentVotes = { [pid]: { name, vote: null, round: room.round, joinedAt: Date.now() } };
   currentRoom = room;
   currentRoom.players = currentVotes;
-  lastSeenRound = currentRoom.round;
   subscribeToRoom(id);
   renderWaitingScreen();
 
@@ -186,7 +171,7 @@ async function joinRoom() {
   }
 
   const votesRows = await db.loadVotes(urlRoom);
-  const decision = resolveJoin(votesRows, pid, name);
+  const decision = resolveJoin(votesRows, pid, name, Date.now(), room.round);
 
   if (decision.kind === 'name-taken') {
     showError(errEl, 'That name is already at the table.');
@@ -194,7 +179,7 @@ async function joinRoom() {
     return;
   }
   if (decision.kind === 'new-player') {
-    const ok = await db.insertVoteRow(urlRoom, pid, name);
+    const ok = await db.insertVoteRow(urlRoom, pid, name, room.round);
     if (!ok) {
       showError(errEl, 'Could not seat you at the table — check your connection and try again.');
       btn.textContent = 'Join the Table'; btn.disabled = false;
@@ -211,12 +196,11 @@ async function joinRoom() {
   // decision.kind === 'rejoin-same-name': nothing to write, name already matches
 
   currentVotes = votesToPlayers(votesRows);
-  currentVotes[pid] = { name, vote: decision.vote, joinedAt: decision.joinedAt };
+  currentVotes[pid] = { name, vote: decision.vote, round: decision.round, joinedAt: decision.joinedAt };
 
   currentRoomId = urlRoom;
   currentRoom = room;
   currentRoom.players = currentVotes;
-  lastSeenRound = currentRoom.round;
   subscribeToRoom(urlRoom);
 
   if (room.started) showGameScreen();
@@ -252,20 +236,23 @@ function initGameButtons() {
 // ── Actions ─────────────────────────────────────────────────────────────
 async function doVote(card) {
   if (!currentRoom || currentRoom.revealed) return;
-  if (!currentRoom.players[pid]) return;
+  const me = currentRoom.players[pid];
+  if (!me) return;
 
-  const previousVote = currentRoom.players[pid].vote;
-  if (previousVote === card) return;
+  // A vote from a past round reads as "no vote" (see isCurrentVote in state.js) — compare against
+  // that, not the raw stored value, so re-clicking a stale card is treated as a fresh pick.
+  const currentVote = me.round === currentRoom.round ? me.vote : null;
+  if (currentVote === card) return;
 
-  currentRoom.players[pid].vote = card;
+  const snapshot = { ...me };
+  me.vote = card;
+  me.round = currentRoom.round;
   renderGameScreen();
 
   const ok = await db.setVote(currentRoomId, pid, card);
 
   if (!ok) {
-    if (currentRoom && currentRoom.players[pid]) {
-      currentRoom.players[pid].vote = previousVote;
-    }
+    currentRoom.players[pid] = snapshot;
     showVoteError('Your bet did not land — try again, partner.');
     renderGameScreen();
   }
@@ -311,7 +298,6 @@ async function doNewRound() {
     if (state) {
       Object.assign(currentRoom, state);
       currentRoom.players = currentVotes;
-      maybeResetOwnVoteForNewRound(currentRoom.round);
     } else {
       showVoteError('Could not start a new round — try again, partner.');
     }

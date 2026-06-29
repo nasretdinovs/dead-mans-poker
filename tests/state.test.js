@@ -3,7 +3,7 @@ import {
   votesToPlayers,
   toNumericVote,
   computeResult,
-  decideRoundReset,
+  isCurrentVote,
   resolveJoin,
   getRoomFromUrl,
   makeRoomId,
@@ -97,52 +97,54 @@ describe('computeResult', () => {
   });
 });
 
-describe('decideRoundReset', () => {
-  it('does not reset on the first-ever observation', () => {
-    expect(decideRoundReset(null, 1)).toEqual({ shouldReset: false, nextLastSeenRound: 1 });
+describe('isCurrentVote', () => {
+  it('is false when there is no vote yet', () => {
+    expect(isCurrentVote({ vote: null, round: 1 }, 1)).toBe(false);
   });
-  it('does not reset when the round is unchanged', () => {
-    expect(decideRoundReset(1, 1)).toEqual({ shouldReset: false, nextLastSeenRound: 1 });
+  it('is true when the vote was cast for the current round', () => {
+    expect(isCurrentVote({ vote: '5', round: 2 }, 2)).toBe(true);
   });
-  it('resets when the round increases', () => {
-    expect(decideRoundReset(1, 2)).toEqual({ shouldReset: true, nextLastSeenRound: 2 });
+  it('regression: a vote stamped with a past round is stale, not "voted"', () => {
+    expect(isCurrentVote({ vote: '5', round: 1 }, 2)).toBe(false);
   });
-  it('resets on any change, not just increases', () => {
-    expect(decideRoundReset(3, 1)).toEqual({ shouldReset: true, nextLastSeenRound: 1 });
+  it('is false for a missing player', () => {
+    expect(isCurrentVote(undefined, 1)).toBe(false);
   });
 });
 
 describe('resolveJoin', () => {
   it('treats an unknown pid with no collision as a new player', () => {
-    expect(resolveJoin([], 'p1', 'Doc', 1000)).toEqual({ kind: 'new-player', vote: null, joinedAt: 1000 });
+    expect(resolveJoin([], 'p1', 'Doc', 1000, 3)).toEqual({ kind: 'new-player', vote: null, round: 3, joinedAt: 1000 });
   });
 
   it('blocks a new player whose name collides with another pid', () => {
-    const rows = [{ player_id: 'p2', name: 'Doc', vote: null, joined_at: '2024-01-01T00:00:00Z' }];
+    const rows = [{ player_id: 'p2', name: 'Doc', vote: null, round: 1, joined_at: '2024-01-01T00:00:00Z' }];
     expect(resolveJoin(rows, 'p1', 'Doc')).toEqual({ kind: 'name-taken' });
   });
 
   it('name collision is case-insensitive', () => {
-    const rows = [{ player_id: 'p2', name: 'doc', vote: null, joined_at: '2024-01-01T00:00:00Z' }];
+    const rows = [{ player_id: 'p2', name: 'doc', vote: null, round: 1, joined_at: '2024-01-01T00:00:00Z' }];
     expect(resolveJoin(rows, 'p1', 'Doc')).toEqual({ kind: 'name-taken' });
   });
 
-  it('rejoin with the same name preserves vote/joinedAt and is never blocked', () => {
+  it('rejoin with the same name preserves vote/round/joinedAt and is never blocked', () => {
     const t = '2024-01-01T00:00:00Z';
-    const rows = [{ player_id: 'p1', name: 'Doc', vote: '5', joined_at: t }];
+    const rows = [{ player_id: 'p1', name: 'Doc', vote: '5', round: 2, joined_at: t }];
     expect(resolveJoin(rows, 'p1', 'Doc')).toEqual({
       kind: 'rejoin-same-name',
       vote: '5',
+      round: 2,
       joinedAt: new Date(t).getTime(),
     });
   });
 
-  it('rejoin with a new name preserves vote/joinedAt', () => {
+  it('rejoin with a new name preserves vote/round/joinedAt', () => {
     const t = '2024-01-01T00:00:00Z';
-    const rows = [{ player_id: 'p1', name: 'Doc', vote: '5', joined_at: t }];
+    const rows = [{ player_id: 'p1', name: 'Doc', vote: '5', round: 2, joined_at: t }];
     expect(resolveJoin(rows, 'p1', 'Doctor')).toEqual({
       kind: 'rejoin-renamed',
       vote: '5',
+      round: 2,
       joinedAt: new Date(t).getTime(),
     });
   });
@@ -150,8 +152,8 @@ describe('resolveJoin', () => {
   it('regression: rejoin is never blocked by a same-name collision with another row', () => {
     const t = '2024-01-01T00:00:00Z';
     const rows = [
-      { player_id: 'p1', name: 'Doc', vote: null, joined_at: t },
-      { player_id: 'p2', name: 'Doc', vote: null, joined_at: t },
+      { player_id: 'p1', name: 'Doc', vote: null, round: 1, joined_at: t },
+      { player_id: 'p2', name: 'Doc', vote: null, round: 1, joined_at: t },
     ];
     const result = resolveJoin(rows, 'p1', 'Doc');
     expect(result.kind).toBe('rejoin-same-name');
@@ -159,7 +161,7 @@ describe('resolveJoin', () => {
 
   it('preserves a null vote exactly on rejoin', () => {
     const t = '2024-01-01T00:00:00Z';
-    const rows = [{ player_id: 'p1', name: 'Doc', vote: null, joined_at: t }];
+    const rows = [{ player_id: 'p1', name: 'Doc', vote: null, round: 1, joined_at: t }];
     expect(resolveJoin(rows, 'p1', 'Doc').vote).toBeNull();
   });
 });
@@ -170,9 +172,9 @@ describe('votesToPlayers', () => {
   });
 
   it('maps rows into a player_id-keyed object', () => {
-    const rows = [{ player_id: 'p1', name: 'Doc', vote: '5', joined_at: '2024-01-01T00:00:00Z' }];
+    const rows = [{ player_id: 'p1', name: 'Doc', vote: '5', round: 2, joined_at: '2024-01-01T00:00:00Z' }];
     expect(votesToPlayers(rows)).toEqual({
-      p1: { name: 'Doc', vote: '5', joinedAt: new Date('2024-01-01T00:00:00Z').getTime() },
+      p1: { name: 'Doc', vote: '5', round: 2, joinedAt: new Date('2024-01-01T00:00:00Z').getTime() },
     });
   });
 });

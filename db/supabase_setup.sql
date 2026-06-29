@@ -37,6 +37,7 @@ create table votes (
   player_id text not null,
   name text not null,
   vote text,
+  round int not null default 1,
   joined_at timestamptz not null default now(),
   primary key (room_id, player_id)
 );
@@ -62,6 +63,14 @@ create policy "anon delete votes" on votes for delete to anon using (true);
 -- no contention with other players' rows (they're separate rows entirely).
 -- Returns true iff a row was actually updated, so the client can detect
 -- "room/player not found" and roll back its optimistic UI update.
+--
+-- Also stamps the row with the room's CURRENT round (read inside the same
+-- statement, so it's atomic with the vote write). This is what lets "New
+-- Round" make every player's stale vote disappear for every viewer at the
+-- exact same instant, with no extra write or per-client cleanup at all: a
+-- vote only counts as "cast" when its `round` matches `rooms.state.round`,
+-- and that comparison is computed identically by every client off data
+-- that's already replicated via realtime. See "5b. New Round" note below.
 create or replace function set_vote(p_room_id text, p_player_id text, p_vote text)
 returns boolean
 language plpgsql
@@ -70,7 +79,8 @@ as $func$
 declare
   affected integer;
 begin
-  update votes set vote = p_vote
+  update votes set vote = p_vote,
+                    round = (select (state->>'round')::int from rooms where id = p_room_id)
   where room_id = p_room_id and player_id = p_player_id;
   get diagnostics affected = row_count;
   return affected > 0;
@@ -155,13 +165,19 @@ grant execute on function reveal_round(text) to anon;
 grant execute on function new_round(text, int) to anon;
 grant execute on function start_game(text) to anon;
 
--- Note: there is deliberately no "clear all votes" RPC. "New Round" is
--- implemented as every connected client independently resetting only its
--- OWN vote row when it notices the room's `round` changed (see
--- `maybeResetOwnVoteForNewRound` in index.html). A blanket "set every row's
--- vote to null" write would race with anyone voting for the new round while
--- that write is still in flight, silently wiping their fresh vote — single
--- writer per row is the invariant that keeps `votes` race-free.
+-- 5b. New Round ----------------------------------------------------------
+-- There is deliberately no "clear all votes" RPC and no per-client cleanup
+-- write either (an earlier design had every client reset its own vote row
+-- when it noticed the round change — that worked but left a window where
+-- different players' screens disagreed about who'd voted, since each
+-- client's self-reset write/realtime-echo landed at a different time on a
+-- flaky network). Instead, staleness is a pure read-side computation:
+-- `votes.round` is stamped at vote-write time (see `set_vote` above), and a
+-- vote only displays as "cast" when `votes.round = rooms.state.round`. Once
+-- `new_round()` bumps `rooms.state.round`, every previous round's votes
+-- become stale for every viewer in the same instant their `rooms` realtime
+-- event arrives — no extra write, no per-player race, no ordering to get
+-- wrong.
 
 -- 5. Realtime ----------------------------------------------------------------
 -- Required so other players see vote/room changes without a manual reload.
@@ -183,8 +199,11 @@ alter publication supabase_realtime add table votes;
 -- insert into votes (room_id, player_id, name, vote) values ('TEST01', 'p1', 'Test', null);
 -- select set_vote('TEST01', 'p1', '5');           -- should return true
 -- select set_vote('TEST01', 'p_missing', '5');    -- should return false
+-- select * from votes where room_id = 'TEST01';   -- vote '5', round 1 (stamped from rooms.state.round)
+-- select new_round('TEST01', 1);                  -- rooms.state.round -> 2
+-- select * from votes where room_id = 'TEST01';   -- vote still '5', round still 1 -> now stale (client treats as not-voted)
 -- select set_vote('TEST01', 'p1', null);           -- own-row reset, should return true
--- select * from votes where room_id = 'TEST01';   -- vote should be null again
+-- select * from votes where room_id = 'TEST01';   -- vote null, round bumped to 2
 
 -- Smoke test the atomic shared-state transitions (CAS behavior):
 -- insert into rooms (id, state) values ('TEST02', '{"deckType":"fibonacci","cards":["1","2","3"],"revealed":false,"round":1,"started":false}');

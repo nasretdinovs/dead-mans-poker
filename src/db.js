@@ -17,13 +17,13 @@ export async function deleteRoom(id) {
 }
 
 export async function loadVotes(roomId) {
-  const { data, error } = await sb.from('votes').select('player_id, name, vote, joined_at').eq('room_id', roomId);
+  const { data, error } = await sb.from('votes').select('player_id, name, vote, round, joined_at').eq('room_id', roomId);
   if (error || !data) return [];
   return data;
 }
 
-export async function insertVoteRow(roomId, playerId, name) {
-  const { error } = await sb.from('votes').insert({ room_id: roomId, player_id: playerId, name, vote: null });
+export async function insertVoteRow(roomId, playerId, name, round) {
+  const { error } = await sb.from('votes').insert({ room_id: roomId, player_id: playerId, name, vote: null, round });
   if (error) { console.error('insertVoteRow error', error); return false; }
   return true;
 }

@@ -2,7 +2,7 @@
 // still fully tears down and rebuilds seats/hand-card DOM on every call (cosmetic jank, not
 // breakage; deferred to a future diffing pass per CLAUDE.md's open issues).
 import { computeSeatPositions } from './seats.js';
-import { computeResult, escHtml } from './state.js';
+import { computeResult, escHtml, isCurrentVote } from './state.js';
 import { showOnly } from './ui.js';
 
 function initials(name) {
@@ -33,15 +33,16 @@ export function renderWaiting({ room, currentRoomId, pid, inviteLink }) {
 export function renderGame({ room, currentRoomId, pid, locked }, { onVote, onReveal, onNewRound }) {
   if (!room) return;
 
+  const round = room.round || 1;
   const players = Object.entries(room.players).sort((a, b) => a[1].joinedAt - b[1].joinedAt);
   const total = players.length;
-  const votedCount = players.filter(([, p]) => p.vote != null).length;
+  const votedCount = players.filter(([, p]) => isCurrentVote(p, round)).length;
   const allVoted = total > 0 && votedCount === total;
   const revealed = !!room.revealed;
-  const myVote = room.players[pid] ? room.players[pid].vote : null;
+  const myVote = isCurrentVote(room.players[pid], round) ? room.players[pid].vote : null;
 
   // bar
-  document.getElementById('game-round').textContent = 'Round ' + (room.round || 1);
+  document.getElementById('game-round').textContent = 'Round ' + round;
   const pidDebug = document.getElementById('game-pid-debug');
   if (pidDebug) {
     const myEntry = room.players[pid];
@@ -58,7 +59,7 @@ export function renderGame({ room, currentRoomId, pid, locked }, { onVote, onRev
   players.forEach(([id, p], i) => {
     const { x, y } = positions[i];
     const me = id === pid;
-    const voted = p.vote != null;
+    const voted = isCurrentVote(p, round);
 
     let slotHtml;
     if (!voted) {
@@ -90,7 +91,7 @@ export function renderGame({ room, currentRoomId, pid, locked }, { onVote, onRev
   // center
   const center = document.getElementById('game-table-center');
   if (revealed) {
-    const res = computeResult(players.map(([, p]) => p.vote), room.deckType);
+    const res = computeResult(players.map(([, p]) => (isCurrentVote(p, round) ? p.vote : null)), room.deckType);
     const nums = (room.cards || [])
       .map(c => (c === '½' ? 0.5 : /^[0-9]+(\.[0-9]+)?$/.test(c) ? Number(c) : null))
       .filter(n => n != null);
