@@ -45,6 +45,29 @@ function renderGameScreen() {
   });
 }
 
+// Supabase Realtime does not replay missed events after a dropped/reconnected websocket — any
+// database change that happened while the connection was down (or even briefly stalled, per the
+// real connection resets seen in production HAR captures) is simply never delivered, leaving
+// this client permanently stuck on stale state with no further events to correct it. Re-fetching
+// the authoritative room+votes rows every time the channel reports SUBSCRIBED (which fires on
+// every successful reconnect, not just the first) closes that gap: whatever was missed during the
+// outage gets picked up in one direct read the moment the connection is healthy again.
+async function resyncRoom() {
+  const id = currentRoomId;
+  if (!id) return;
+  const room = await db.loadRoom(id);
+  if (currentRoomId !== id) return; // left/switched rooms while this was in flight
+  if (!room) { goLobby(); return; }
+  const votesRows = await db.loadVotes(id);
+  if (currentRoomId !== id) return;
+  currentVotes = votesToPlayers(votesRows);
+  if (!currentVotes[pid]) { goLobby(); return; }
+  currentRoom = room;
+  currentRoom.players = currentVotes;
+  lastAppliedUpdatedAt = null;
+  renderAfterChange();
+}
+
 function subscribeToRoom(id) {
   if (realtimeChannel) { unsubscribeRoom(realtimeChannel); realtimeChannel = null; }
   lastAppliedUpdatedAt = null;
@@ -52,6 +75,7 @@ function subscribeToRoom(id) {
     onStatusChange: (status, err) => {
       console.log('[realtime]', new Date().toISOString(), 'room:' + id, status, err || '');
       renderConnStatus(status);
+      if (status === 'SUBSCRIBED') resyncRoom();
     },
     onRoomDeleted: () => {
       console.log('[realtime:event]', new Date().toISOString(), 'rooms DELETE');
