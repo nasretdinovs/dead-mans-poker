@@ -100,6 +100,13 @@ grant execute on function set_vote(text, text, text) to anon;
 -- falls through to re-reading the row. Either way both callers receive the
 -- same authoritative `state` back — there is no path where two clients can
 -- walk away with two different "current" states.
+-- reveal_round also freezes a `votesSnapshot` (player_id -> vote) into `state`, computed from
+-- the `votes` table in the SAME UPDATE statement as the revealed flip. Without this, every
+-- client would compute the verdict locally from whatever vote rows its OWN realtime stream has
+-- delivered so far — on a flaky connection, two clients could briefly show different verdicts
+-- (or different seat cards) depending on which vote updates each had received. Freezing the
+-- snapshot once, server-side, atomically with reveal, means every client renders the exact same
+-- numbers the instant it sees `revealed:true`, with no dependency on its own event-delivery timing.
 create or replace function reveal_round(p_room_id text)
 returns jsonb
 language plpgsql
@@ -108,7 +115,18 @@ as $func$
 declare
   v_state jsonb;
 begin
-  update rooms set state = jsonb_set(state, '{revealed}', 'true'),
+  update rooms set state = jsonb_set(
+                              jsonb_set(state, '{revealed}', 'true'),
+                              '{votesSnapshot}',
+                              coalesce(
+                                (select jsonb_object_agg(player_id, vote)
+                                 from votes
+                                 where room_id = p_room_id
+                                   and round = (state->>'round')::int
+                                   and vote is not null),
+                                '{}'::jsonb
+                              )
+                            ),
                    updated_at = now()
   where id = p_room_id and (state->>'revealed') = 'false'
   returning state into v_state;
@@ -129,7 +147,7 @@ declare
   v_state jsonb;
 begin
   update rooms set state = jsonb_set(jsonb_set(state, '{revealed}', 'false'),
-                                      '{round}', to_jsonb(p_expected_round + 1)),
+                                      '{round}', to_jsonb(p_expected_round + 1)) - 'votesSnapshot',
                    updated_at = now()
   where id = p_room_id and (state->>'round')::int = p_expected_round
   returning state into v_state;
@@ -205,11 +223,12 @@ alter publication supabase_realtime add table votes;
 -- select set_vote('TEST01', 'p1', null);           -- own-row reset, should return true
 -- select * from votes where room_id = 'TEST01';   -- vote null, round bumped to 2
 
--- Smoke test the atomic shared-state transitions (CAS behavior):
+-- Smoke test the atomic shared-state transitions (CAS behavior) + the votesSnapshot freeze:
 -- insert into rooms (id, state) values ('TEST02', '{"deckType":"fibonacci","cards":["1","2","3"],"revealed":false,"round":1,"started":false}');
--- select reveal_round('TEST02');                   -- revealed -> true
--- select reveal_round('TEST02');                   -- already true: no-op, still returns revealed:true (not an error)
--- select new_round('TEST02', 1);                   -- round 1 -> 2, revealed -> false
+-- insert into votes (room_id, player_id, name, vote, round) values ('TEST02', 'p1', 'A', '3', 1), ('TEST02', 'p2', 'B', '5', 1);
+-- select reveal_round('TEST02');                   -- revealed -> true, votesSnapshot -> {"p1":"3","p2":"5"}
+-- select reveal_round('TEST02');                   -- already true: no-op, same votesSnapshot returned (not an error)
+-- select new_round('TEST02', 1);                   -- round 1 -> 2, revealed -> false, votesSnapshot removed
 -- select new_round('TEST02', 1);                   -- stale expected round: no-op, returns round:2 unchanged
 -- select start_game('TEST02');                     -- started -> true
 -- delete from rooms where id = 'TEST02';           -- cascades and deletes any votes rows too

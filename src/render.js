@@ -39,7 +39,14 @@ export function renderGame({ room, currentRoomId, pid, locked }, { onVote, onRev
   const votedCount = players.filter(([, p]) => isCurrentVote(p, round)).length;
   const allVoted = total > 0 && votedCount === total;
   const revealed = !!room.revealed;
-  const myVote = isCurrentVote(room.players[pid], round) ? room.players[pid].vote : null;
+  // Once revealed, every client reads votes from the server-frozen `votesSnapshot` (set
+  // atomically by reveal_round, see db/supabase_setup.sql) instead of each client's own
+  // currentVotes cache — that cache fills in via realtime at its own pace, so two clients could
+  // otherwise briefly render different cards/verdicts depending on which vote updates each had
+  // received by the time of the reveal.
+  const snapshot = revealed ? (room.votesSnapshot || {}) : null;
+  const voteOf = (id, p) => (snapshot ? snapshot[id] ?? null : (isCurrentVote(p, round) ? p.vote : null));
+  const myVote = voteOf(pid, room.players[pid]);
 
   // bar
   document.getElementById('game-round').textContent = 'Round ' + round;
@@ -59,20 +66,21 @@ export function renderGame({ room, currentRoomId, pid, locked }, { onVote, onRev
   players.forEach(([id, p], i) => {
     const { x, y } = positions[i];
     const me = id === pid;
-    const voted = isCurrentVote(p, round);
+    const seatVote = voteOf(id, p);
+    const voted = seatVote != null;
 
     let slotHtml;
     if (!voted) {
       slotHtml = `<div class="seat-slot seat-slot-empty"></div>`;
     } else {
       const flippedClass = revealed ? ' flipped' : '';
-      const numSize = p.vote && p.vote.length > 2 ? '13px' : '20px';
+      const numSize = seatVote.length > 2 ? '13px' : '20px';
       slotHtml = `<div class="card-wrap">
         <div class="card-inner${flippedClass}">
           <div class="card-back"></div>
           <div class="card-face">
             <span class="card-face-orn">✦</span>
-            <span class="card-face-num" style="font-size:${numSize}">${escHtml(p.vote)}</span>
+            <span class="card-face-num" style="font-size:${numSize}">${escHtml(seatVote)}</span>
             <span class="card-face-orn">✦</span>
           </div>
         </div>
@@ -91,7 +99,7 @@ export function renderGame({ room, currentRoomId, pid, locked }, { onVote, onRev
   // center
   const center = document.getElementById('game-table-center');
   if (revealed) {
-    const res = computeResult(players.map(([, p]) => (isCurrentVote(p, round) ? p.vote : null)), room.deckType);
+    const res = computeResult(Object.values(snapshot), room.deckType);
     const nums = (room.cards || [])
       .map(c => (c === '½' ? 0.5 : /^[0-9]+(\.[0-9]+)?$/.test(c) ? Number(c) : null))
       .filter(n => n != null);
