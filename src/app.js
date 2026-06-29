@@ -71,11 +71,20 @@ async function resyncRoom() {
 function subscribeToRoom(id) {
   if (realtimeChannel) { unsubscribeRoom(realtimeChannel); realtimeChannel = null; }
   lastAppliedUpdatedAt = null;
+  // createRoom()/joinRoom() already did their own fresh loadRoom()/loadVotes() right before
+  // calling this, so the FIRST SUBSCRIBED would just repeat that work — wasteful, and doubles the
+  // number of REST calls competing for an already-flaky connection at exactly the moment (initial
+  // join) when that's most likely to hurt. Only resync from the second SUBSCRIBED onward, i.e. on
+  // an actual reconnect after a drop.
+  let isReconnect = false;
   realtimeChannel = subscribeRoom(id, {
     onStatusChange: (status, err) => {
       console.log('[realtime]', new Date().toISOString(), 'room:' + id, status, err || '');
       renderConnStatus(status);
-      if (status === 'SUBSCRIBED') resyncRoom();
+      if (status === 'SUBSCRIBED') {
+        if (isReconnect) resyncRoom();
+        isReconnect = true;
+      }
     },
     onRoomDeleted: () => {
       console.log('[realtime:event]', new Date().toISOString(), 'rooms DELETE');
